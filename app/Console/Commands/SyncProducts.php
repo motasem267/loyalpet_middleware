@@ -1,0 +1,42 @@
+<?php
+
+namespace App\Console\Commands;
+
+use App\Models\Product;
+use App\Services\ERPNextService;
+use Illuminate\Console\Attributes\Description;
+use Illuminate\Console\Attributes\Signature;
+use Illuminate\Console\Command;
+
+#[Signature('sync:products')]
+#[Description('سحب المنتجات من ERPNext وتحديث الكاش المحلي')]
+class SyncProducts extends Command
+{
+    public function handle(ERPNextService $erp): int
+    {
+        $items = $erp->getAll('Item', fields: [
+            'name', 'item_code', 'item_name', 'item_group', 'description',
+            'image', 'standard_rate', 'disabled',
+        ]);
+
+        foreach ($items as $item) {
+            Product::updateOrCreate(
+                ['erp_name' => $item['name']],
+                [
+                    'item_code' => $item['item_code'],
+                    'item_name' => $item['item_name'],
+                    'item_group_erp_name' => $item['item_group'] ?: null,
+                    'description' => $item['description'] ?: null,
+                    'image_path' => $item['image'] ?: null,
+                    'price' => $item['standard_rate'] ?? 0,
+                    'is_active' => ! $item['disabled'],
+                    'updated_at' => now(),
+                ]
+            );
+        }
+
+        $this->info('تمت مزامنة '.count($items).' منتج.');
+
+        return self::SUCCESS;
+    }
+}
