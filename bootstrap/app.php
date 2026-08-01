@@ -13,7 +13,9 @@ return Application::configure(basePath: dirname(__DIR__))
         health: '/up',
     )
     ->withMiddleware(function (Middleware $middleware): void {
-        //
+        // API فقط — مفيش صفحة "login" ويب نرجّع لها الزوار الغير مسجّلين دخول،
+        // فبنمنع أي محاولة redirect ونخلي Sanctum يرجع 401 JSON دايمًا.
+        $middleware->redirectGuestsTo(fn () => null);
     })
     ->withExceptions(function (Exceptions $exceptions): void {
         $exceptions->shouldRenderJsonWhen(
