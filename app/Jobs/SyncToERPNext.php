@@ -89,7 +89,7 @@ class SyncToERPNext implements ShouldQueue
             'erp_order' => $result['name'],
             'user_id' => $this->sync->user_id,
             'old_status' => null,
-            'new_status' => $result['workflow_state'] ?? $result['status'] ?? 'قيد التوصيل',
+            'new_status' => $result['custom_workflow_state'] ?? $result['workflow_state'] ?? $result['status'] ?? 'قيد التوصيل',
             'changed_by' => 'system',
         ]);
     }

@@ -93,10 +93,12 @@ class OrderController extends Controller
                 'reference' => $sync->id,
             ]);
 
+        // custom_workflow_state (مش workflow_state المدمج في Frappe) — نفس الحقل
+        // المستخدم في WebhookController::handleSalesOrderEvent.
         $synced = $user->erp_customer_id
             ? $erp->getList('Sales Order',
                 filters: [['customer', '=', $user->erp_customer_id]],
-                fields: ['name', 'status', 'workflow_state', 'grand_total', 'transaction_date', 'custom_payment_method'],
+                fields: ['name', 'status', 'custom_workflow_state', 'grand_total', 'transaction_date', 'custom_payment_method'],
                 limit: 50,
             )
             : [];
