@@ -45,6 +45,7 @@ Route::prefix('v1')->group(function () {
 
         Route::get('/categories', [CategoryController::class, 'index']);
         Route::get('/products', [ProductController::class, 'index']);
+        Route::get('/products/featured', [ProductController::class, 'featured']);
         Route::get('/products/{product}', [ProductController::class, 'show']);
         Route::get('/bundles', [BundleController::class, 'index']);
         Route::get('/bundles/{bundle}', [BundleController::class, 'show']);

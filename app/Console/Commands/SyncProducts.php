@@ -17,6 +17,7 @@ class SyncProducts extends Command
         $items = $erp->getAll('Item', fields: [
             'name', 'item_code', 'item_name', 'item_group', 'description',
             'image', 'standard_rate', 'disabled',
+            'custom_show_in_app', 'custom_is_featured', 'custom_featured_order',
         ]);
 
         foreach ($items as $item) {
@@ -30,6 +31,9 @@ class SyncProducts extends Command
                     'image_path' => $item['image'] ?: null,
                     'price' => $item['standard_rate'] ?? 0,
                     'is_active' => ! $item['disabled'],
+                    'show_in_app' => (bool) ($item['custom_show_in_app'] ?? true),
+                    'is_featured' => (bool) ($item['custom_is_featured'] ?? false),
+                    'featured_order' => (int) ($item['custom_featured_order'] ?? 0),
                     'updated_at' => now(),
                 ]
             );

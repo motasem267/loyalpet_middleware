@@ -76,22 +76,31 @@ class OrderController extends Controller
 
     /**
      * قراءة مباشرة من ERPNext (بدون كاش) + أي طلبات لسه في طور الإرسال (مش موجودة في ERPNext بعد).
+     * Pagination عبر ?page= و ?per_page= — الطلبات المعلّقة (لسه ما وصلتش ERPNext) تظهر
+     * في أول صفحة بس. offset حقيقي من ERPNext (مش تقريبي)، لكن من غير عدّ كلي (has_more
+     * heuristic) عشان نتجنب نداء إضافي لـ ERPNext بس لحساب العدد.
      */
     public function index(Request $request, ERPNextService $erp): JsonResponse
     {
         $user = $request->user();
+        $perPage = min(50, max(1, (int) $request->query('per_page', 20)));
+        $page = max(1, (int) $request->query('page', 1));
 
-        $pending = PendingSync::where('user_id', $user->id)
-            ->where('doctype', 'Sales Order')
-            ->whereIn('status', ['pending', 'processing', 'failed'])
-            ->get()
-            ->map(fn (PendingSync $sync) => [
-                'name' => null,
-                'status' => $sync->status === 'failed' ? 'فشل الإرسال' : 'جاري الإرسال',
-                'grand_total' => null,
-                'transaction_date' => $sync->created_at,
-                'reference' => $sync->id,
-            ]);
+        $pending = collect();
+
+        if ($page === 1) {
+            $pending = PendingSync::where('user_id', $user->id)
+                ->where('doctype', 'Sales Order')
+                ->whereIn('status', ['pending', 'processing', 'failed'])
+                ->get()
+                ->map(fn (PendingSync $sync) => [
+                    'name' => null,
+                    'status' => $sync->status === 'failed' ? 'فشل الإرسال' : 'جاري الإرسال',
+                    'grand_total' => null,
+                    'transaction_date' => $sync->created_at,
+                    'reference' => $sync->id,
+                ]);
+        }
 
         // custom_workflow_state (مش workflow_state المدمج في Frappe) — نفس الحقل
         // المستخدم في WebhookController::handleSalesOrderEvent.
@@ -99,11 +108,19 @@ class OrderController extends Controller
             ? $erp->getList('Sales Order',
                 filters: [['customer', '=', $user->erp_customer_id]],
                 fields: ['name', 'status', 'custom_workflow_state', 'grand_total', 'transaction_date', 'custom_payment_method'],
-                limit: 50,
+                limit: $perPage,
+                offset: ($page - 1) * $perPage,
             )
             : [];
 
-        return response()->json(['data' => $pending->concat($synced)->values()]);
+        return response()->json([
+            'data' => $pending->concat($synced)->values(),
+            'meta' => [
+                'page' => $page,
+                'per_page' => $perPage,
+                'has_more' => count($synced) >= $perPage,
+            ],
+        ]);
     }
 
     public function show(Request $request, string $order, ERPNextService $erp): JsonResponse
