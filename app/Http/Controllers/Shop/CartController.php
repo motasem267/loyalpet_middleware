@@ -48,7 +48,12 @@ class CartController extends Controller
         $item = $cart->items()->where('erp_item_code', $validated['item_code'])->first();
 
         if ($item) {
-            $item->increment('quantity', $quantity);
+            // بنحدّث السعر لآخر سعر معروف للمنتج كل مرة — مش بس نزوّد الكمية،
+            // وإلا الكمية الجديدة تتحسب بسعر قديم مجمّد من أول إضافة.
+            $item->update([
+                'quantity' => $item->quantity + $quantity,
+                'price_at_add' => $product->price,
+            ]);
         } else {
             $cart->items()->create([
                 'erp_item_code' => $validated['item_code'],
@@ -62,13 +67,13 @@ class CartController extends Controller
         return response()->json(['data' => $this->transformCart($cart)], 201);
     }
 
-    public function update(Request $request, CartItem $cartItem): JsonResponse
+    public function update(Request $request, string $itemCode): JsonResponse
     {
-        $this->authorizeOwnership($request, $cartItem);
-
         $validated = $request->validate([
             'quantity' => ['required', 'numeric', 'min:0.001'],
         ]);
+
+        $cartItem = $this->findCartItem($request, $itemCode);
 
         $cartItem->update(['quantity' => $validated['quantity']]);
 
@@ -77,9 +82,9 @@ class CartController extends Controller
         return response()->json(['data' => $this->transformCart($cart)]);
     }
 
-    public function destroy(Request $request, CartItem $cartItem): JsonResponse
+    public function destroy(Request $request, string $itemCode): JsonResponse
     {
-        $this->authorizeOwnership($request, $cartItem);
+        $cartItem = $this->findCartItem($request, $itemCode);
 
         $cart = $cartItem->cart;
         $cartItem->delete();
@@ -89,9 +94,24 @@ class CartController extends Controller
         return response()->json(['data' => $this->transformCart($cart)]);
     }
 
-    private function authorizeOwnership(Request $request, CartItem $cartItem): void
+    /**
+     * كل مستخدم عنده سلة نشطة واحدة بس، وitem_code فريد جواها (بيتزود في الكمية
+     * بدل ما يتكرر السطر وقت الإضافة) — فالتوجيه بـ item_code آمن ومحصور بسلة
+     * المستخدم الحالي تلقائيًا، بدون احتياج لفحص ملكية منفصل.
+     */
+    private function findCartItem(Request $request, string $itemCode): CartItem
     {
-        abort_unless($cartItem->cart->user_id === $request->user()->id, 403);
+        $cart = Cart::where('user_id', $request->user()->id)
+            ->where('status', 'active')
+            ->first();
+
+        abort_if(! $cart, 404, 'السلة غير موجودة');
+
+        $cartItem = $cart->items()->where('erp_item_code', $itemCode)->first();
+
+        abort_if(! $cartItem, 404, 'المنتج غير موجود في السلة');
+
+        return $cartItem;
     }
 
     private function transformCart(?Cart $cart): array

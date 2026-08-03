@@ -51,8 +51,8 @@ Route::prefix('v1')->group(function () {
 
         Route::get('/cart', [CartController::class, 'index']);
         Route::post('/cart/items', [CartController::class, 'store']);
-        Route::patch('/cart/items/{cartItem}', [CartController::class, 'update']);
-        Route::delete('/cart/items/{cartItem}', [CartController::class, 'destroy']);
+        Route::patch('/cart/items/{itemCode}', [CartController::class, 'update']);
+        Route::delete('/cart/items/{itemCode}', [CartController::class, 'destroy']);
 
         Route::get('/orders', [OrderController::class, 'index']);
         Route::post('/orders', [OrderController::class, 'store']);
