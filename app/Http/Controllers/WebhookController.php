@@ -219,6 +219,7 @@ class WebhookController extends Controller
                 'item_code' => $data['item_code'] ?? null,
                 'item_name' => $data['item_name'] ?? $data['name'],
                 'item_group_erp_name' => $data['item_group'] ?: null,
+                'variant_of' => $data['variant_of'] ?: null,
                 'description' => $data['description'] ?: null,
                 'image_path' => $data['image'] ?: null,
                 'price' => $data['standard_rate'] ?? 0,

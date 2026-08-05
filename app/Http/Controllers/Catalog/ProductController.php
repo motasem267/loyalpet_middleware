@@ -46,13 +46,26 @@ class ProductController extends Controller
     }
 
     /**
-     * تفاصيل منتج واحد (وصف + صورة) — لشاشة تفاصيل المنتج.
+     * تفاصيل منتج واحد (وصف + صورة) — لشاشة تفاصيل المنتج. لو المنتج عنده عبوات/أحجام
+     * تانية (نظام Item Variants في ERPNext — variant_of)، بترجع في مفتاح "variants".
      */
     public function show(Product $product): JsonResponse
     {
         abort_unless($product->is_active && $product->show_in_app, 404, 'المنتج غير موجود');
 
-        return response()->json(['data' => $product]);
+        $variants = $product->variant_of
+            ? $product->variants()
+                ->where('is_active', true)
+                ->where('show_in_app', true)
+                ->get(['id', 'erp_name', 'item_code', 'item_name', 'price', 'image_path'])
+            : collect();
+
+        return response()->json([
+            'data' => [
+                ...$product->toArray(),
+                'variants' => $variants,
+            ],
+        ]);
     }
 
     private function paginate(Request $request, Builder $query): array

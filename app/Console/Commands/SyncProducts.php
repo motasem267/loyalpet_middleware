@@ -16,7 +16,7 @@ class SyncProducts extends Command
     {
         $items = $erp->getAll('Item', fields: [
             'name', 'item_code', 'item_name', 'item_group', 'description',
-            'image', 'standard_rate', 'disabled',
+            'image', 'standard_rate', 'disabled', 'variant_of',
             'custom_show_in_app', 'custom_is_featured', 'custom_featured_order',
         ]);
 
@@ -27,6 +27,7 @@ class SyncProducts extends Command
                     'item_code' => $item['item_code'],
                     'item_name' => $item['item_name'],
                     'item_group_erp_name' => $item['item_group'] ?: null,
+                    'variant_of' => $item['variant_of'] ?: null,
                     'description' => $item['description'] ?: null,
                     'image_path' => $item['image'] ?: null,
                     'price' => $item['standard_rate'] ?? 0,
