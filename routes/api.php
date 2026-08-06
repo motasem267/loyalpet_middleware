@@ -5,6 +5,7 @@ use App\Http\Controllers\Auth\DeviceController;
 use App\Http\Controllers\Auth\ProfileController;
 use App\Http\Controllers\Catalog\BundleController;
 use App\Http\Controllers\Catalog\CategoryController;
+use App\Http\Controllers\Catalog\DeliveryZoneController;
 use App\Http\Controllers\Catalog\ProductController;
 use App\Http\Controllers\Shop\CartController;
 use App\Http\Controllers\Shop\HotelController;
@@ -49,6 +50,7 @@ Route::prefix('v1')->group(function () {
         Route::get('/products/{product}', [ProductController::class, 'show']);
         Route::get('/bundles', [BundleController::class, 'index']);
         Route::get('/bundles/{bundle}', [BundleController::class, 'show']);
+        Route::get('/delivery-zones', [DeliveryZoneController::class, 'index']);
 
         Route::get('/cart', [CartController::class, 'index']);
         Route::post('/cart/items', [CartController::class, 'store']);

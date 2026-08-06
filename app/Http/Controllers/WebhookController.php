@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Models\AuditLog;
 use App\Models\Bundle;
+use App\Models\DeliveryZone;
 use App\Models\ItemGroup;
 use App\Models\Notification;
 use App\Models\OrderStatusHistory;
@@ -36,6 +37,7 @@ class WebhookController extends Controller
             'Item' => $this->handleItemUpdate($data),
             'Item Group' => $this->handleItemGroupUpdate($data),
             'Product Bundle' => $this->handleProductBundleUpdate($data, $erp),
+            'Delivery Zone' => $this->handleDeliveryZoneUpdate($data),
             'Wallet Transaction', 'Vet Appointment', 'Hotel Booking' => $this->logAuditEvent($doctype, $data),
             default => Log::info('[Webhook:erp] doctype غير معالج: '.($doctype ?? 'null')),
         };
@@ -259,6 +261,24 @@ class WebhookController extends Controller
                 'price' => $item['standard_rate'] ?? 0,
                 'image_path' => $data['custom_image'] ?: null,
                 'is_active' => ! ($item['disabled'] ?? false),
+                'updated_at' => now(),
+            ]
+        );
+    }
+
+    /**
+     * بيتبعت على أي إنشاء أو تعديل لمنطقة توصيل (سعر، تفعيل/تعطيل، اسم) — upsert
+     * بـ erp_name زي باقي أنواع الكاتالوج. is_active=0 بيسيب السجل موجود بس نتجاهله
+     * من قوائم الاختيار، مش حذف فعلي.
+     */
+    private function handleDeliveryZoneUpdate(array $data): void
+    {
+        DeliveryZone::updateOrCreate(
+            ['erp_name' => $data['name']],
+            [
+                'zone_name' => $data['zone_name'],
+                'delivery_price' => $data['delivery_price'] ?? 0,
+                'is_active' => (bool) ($data['is_active'] ?? true),
                 'updated_at' => now(),
             ]
         );
