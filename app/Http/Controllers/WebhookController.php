@@ -213,8 +213,19 @@ class WebhookController extends Controller
         abort_unless($signature && hash_equals($expected, $signature), 401, 'invalid signature');
     }
 
+    /**
+     * ⚠️ الحذف (LoyalPet Item Sync (Delete)) بيبعت payload مختصر عمدًا (بدون item_name) —
+     * ده الفاصل الوحيد اللي عندنا نفرّق بيه حذف عن إنشاء/تعديل، فبنسوفت-ديليت
+     * (is_active=false) بدل ما نمسح الصف فعليًا، عشان الطلبات القديمة تفضل واضحة.
+     */
     private function handleItemUpdate(array $data): void
     {
+        if (! array_key_exists('item_name', $data)) {
+            Product::where('erp_name', $data['name'])->update(['is_active' => false, 'updated_at' => now()]);
+
+            return;
+        }
+
         Product::updateOrCreate(
             ['erp_name' => $data['name']],
             [
@@ -222,6 +233,7 @@ class WebhookController extends Controller
                 'item_name' => $data['item_name'] ?? $data['name'],
                 'item_group_erp_name' => $data['item_group'] ?: null,
                 'variant_of' => $data['variant_of'] ?: null,
+                'attributes' => $this->cleanAttributes($data['attributes'] ?? []),
                 'description' => $data['description'] ?: null,
                 'image_path' => $data['image'] ?: null,
                 'price' => $data['standard_rate'] ?? 0,
@@ -232,6 +244,18 @@ class WebhookController extends Controller
                 'updated_at' => now(),
             ]
         );
+    }
+
+    /**
+     * صفوف attributes من Frappe فيها حقول داخلية زيادة (creation, owner, idx...) —
+     * بنسيب بس attribute/attribute_value.
+     */
+    private function cleanAttributes(array $rows): array
+    {
+        return array_map(fn (array $row) => [
+            'attribute' => $row['attribute'] ?? null,
+            'attribute_value' => $row['attribute_value'] ?? null,
+        ], $rows);
     }
 
     private function handleItemGroupUpdate(array $data): void

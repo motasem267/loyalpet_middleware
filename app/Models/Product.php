@@ -9,7 +9,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 
 #[Fillable([
-    'erp_name', 'item_code', 'item_name', 'item_group_erp_name', 'variant_of',
+    'erp_name', 'item_code', 'item_name', 'item_group_erp_name', 'variant_of', 'attributes',
     'description', 'image_path', 'price', 'is_active',
     'show_in_app', 'is_featured', 'featured_order',
 ])]
@@ -28,6 +28,7 @@ class Product extends Model
             'is_active' => 'boolean',
             'show_in_app' => 'boolean',
             'is_featured' => 'boolean',
+            'attributes' => 'array',
             'updated_at' => 'datetime',
         ];
     }
@@ -38,12 +39,11 @@ class Product extends Model
     }
 
     /**
-     * باقي عبوات/أحجام نفس المنتج (نظام Item Variants في ERPNext) — منتجات تانية
-     * ليها نفس القالب (variant_of)، عدا نفسه.
+     * عبوات/أحجام هذا المنتج (نظام Item Variants في ERPNext) — بيُستخدم على منتج
+     * "قالب" (Template، variant_of = null) لجيب المنتجات (Variants) التابعة له.
      */
     public function variants(): HasMany
     {
-        return $this->hasMany(Product::class, 'variant_of', 'variant_of')
-            ->where('id', '!=', $this->id);
+        return $this->hasMany(Product::class, 'variant_of', 'erp_name');
     }
 }

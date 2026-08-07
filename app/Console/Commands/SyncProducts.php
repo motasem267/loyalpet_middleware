@@ -21,6 +21,21 @@ class SyncProducts extends Command
         ]);
 
         foreach ($items as $item) {
+            // attributes (جدول فرعي) ما بيرجعش عبر getAll زي أي child table تاني —
+            // بنجيبه بنداء إضافي بس للـ variants (variant_of موجود)، مش لكل المنتجات،
+            // عشان ما نضاعفش عدد النداءات على كامل الكتالوج بلا داعي.
+            $attributes = [];
+
+            if (! empty($item['variant_of'])) {
+                $fullDoc = $erp->get('Item', $item['name']);
+                $attributes = collect($fullDoc['attributes'] ?? [])
+                    ->map(fn (array $row) => [
+                        'attribute' => $row['attribute'] ?? null,
+                        'attribute_value' => $row['attribute_value'] ?? null,
+                    ])
+                    ->all();
+            }
+
             Product::updateOrCreate(
                 ['erp_name' => $item['name']],
                 [
@@ -28,6 +43,7 @@ class SyncProducts extends Command
                     'item_name' => $item['item_name'],
                     'item_group_erp_name' => $item['item_group'] ?: null,
                     'variant_of' => $item['variant_of'] ?: null,
+                    'attributes' => $attributes,
                     'description' => $item['description'] ?: null,
                     'image_path' => $item['image'] ?: null,
                     'price' => $item['standard_rate'] ?? 0,

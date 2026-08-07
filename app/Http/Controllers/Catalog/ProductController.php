@@ -16,7 +16,9 @@ class ProductController extends Controller
      */
     public function index(Request $request): JsonResponse
     {
-        $query = Product::query()->where('is_active', true)->where('show_in_app', true);
+        // variant_of != null معناه المنتج ده "عبوة/حجم" تابع لمنتج تاني (Item Variants) —
+        // بيظهر جوّه variants بتاع المنتج الأساسي بس، مش كسطر مستقل في القائمة الرئيسية.
+        $query = Product::query()->where('is_active', true)->where('show_in_app', true)->whereNull('variant_of');
 
         if ($itemGroup = $request->query('item_group')) {
             $query->where('item_group_erp_name', $itemGroup);
@@ -39,6 +41,7 @@ class ProductController extends Controller
             ->where('is_active', true)
             ->where('show_in_app', true)
             ->where('is_featured', true)
+            ->whereNull('variant_of')
             ->orderBy('featured_order')
             ->orderBy('id');
 
@@ -53,12 +56,10 @@ class ProductController extends Controller
     {
         abort_unless($product->is_active && $product->show_in_app, 404, 'المنتج غير موجود');
 
-        $variants = $product->variant_of
-            ? $product->variants()
-                ->where('is_active', true)
-                ->where('show_in_app', true)
-                ->get(['id', 'erp_name', 'item_code', 'item_name', 'price', 'image_path'])
-            : collect();
+        $variants = $product->variants()
+            ->where('is_active', true)
+            ->where('show_in_app', true)
+            ->get(['id', 'erp_name', 'item_code', 'item_name', 'price', 'image_path', 'attributes']);
 
         return response()->json([
             'data' => [
