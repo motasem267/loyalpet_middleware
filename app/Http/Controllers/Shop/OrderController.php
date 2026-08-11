@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Jobs\SyncToERPNext;
 use App\Models\Cart;
 use App\Models\PendingSync;
+use App\Models\Product;
 use App\Services\ERPNextService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -133,6 +134,25 @@ class OrderController extends Controller
 
         abort_unless(($doc['customer'] ?? null) === $request->user()->erp_customer_id, 403);
 
+        $doc['items'] = $this->withProductImages($doc['items'] ?? []);
+
         return response()->json(['data' => $doc]);
+    }
+
+    /**
+     * صورة المنتج مش راجعة أصلًا في صفوف items بتاعة Sales Order في ERPNext —
+     * بنجيبها من الكاش المحلي (products) بمطابقة item_code، مش من ERPNext تاني.
+     */
+    private function withProductImages(array $items): array
+    {
+        $images = Product::whereIn('item_code', array_column($items, 'item_code'))
+            ->get(['item_code', 'image_path'])
+            ->keyBy('item_code');
+
+        return array_map(function (array $item) use ($images) {
+            $item['image_url'] = $images->get($item['item_code'])?->image_url;
+
+            return $item;
+        }, $items);
     }
 }

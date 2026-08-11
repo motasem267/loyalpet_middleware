@@ -8,6 +8,7 @@ use App\Http\Controllers\Catalog\CategoryController;
 use App\Http\Controllers\Catalog\DeliveryZoneController;
 use App\Http\Controllers\Catalog\ProductController;
 use App\Http\Controllers\Shop\CartController;
+use App\Http\Controllers\Shop\FavoriteController;
 use App\Http\Controllers\Shop\HotelController;
 use App\Http\Controllers\Shop\OrderController;
 use App\Http\Controllers\Shop\PaymentController;
@@ -52,6 +53,10 @@ Route::prefix('v1')->group(function () {
         Route::get('/bundles/{bundle}', [BundleController::class, 'show']);
         Route::get('/delivery-zones', [DeliveryZoneController::class, 'index']);
 
+        Route::get('/favorites', [FavoriteController::class, 'index']);
+        Route::post('/favorites', [FavoriteController::class, 'store']);
+        Route::delete('/favorites/{product}', [FavoriteController::class, 'destroy']);
+
         Route::get('/cart', [CartController::class, 'index']);
         Route::post('/cart/items', [CartController::class, 'store']);
         Route::patch('/cart/items/{itemCode}', [CartController::class, 'update']);
@@ -74,5 +79,6 @@ Route::prefix('v1')->group(function () {
         Route::get('/support/tickets', [SupportController::class, 'index']);
         Route::post('/support/tickets', [SupportController::class, 'store']);
         Route::get('/support/tickets/{ticket}', [SupportController::class, 'show']);
+        Route::get('/support/contact-phone', [SupportController::class, 'contactPhone']);
     });
 });

@@ -81,4 +81,20 @@ class SupportController extends Controller
 
         return response()->json(['data' => $doc]);
     }
+
+    /**
+     * رقم هاتف التواصل — بيُقرأ من حساب الـ User في ERPNext اللي الـ API Key بتاعنا
+     * مسجل بيه (mobile_no)، مش من بيانات أي زبون. تقدر تتغيّر مركزيًا من ERPNext
+     * من غير ما نعمل نشر جديد للتطبيق.
+     */
+    public function contactPhone(ERPNextService $erp): JsonResponse
+    {
+        $email = config('erpnext.api_user_email');
+
+        abort_if(! $email, 500, 'ERPNEXT_API_USER_EMAIL غير مضبوط');
+
+        $user = $erp->get('User', $email);
+
+        return response()->json(['data' => ['phone' => $user['mobile_no'] ?? null]]);
+    }
 }
