@@ -31,7 +31,13 @@ Route::prefix('v1')->group(function () {
 
     // بدون auth:sanctum — TLYNC برضو مش مستخدم موبايل. ⚠️ بدون توقيع (TLYNC ما يوفروش
     // HMAC)، فبنتحقق من الدفع فعليًا عبر استدعاء TLYNC نفسه جوّه الكنترولر، مش من محتوى الطلب هنا.
+    // ملاحظة: TLYNC بقى مش مستخدم في /wallet/topup (استبدلناه بـ Ezone Pay)، سايبين
+    // الراوت ده شغال لسه احتياطًا لأي عملية دفع قديمة لسه في طريقها.
     Route::post('/webhooks/tlync', [PaymentController::class, 'handleTlyncWebhook']);
+
+    // بدون auth:sanctum — Ezone Pay محمي بتوقيع HMAC حقيقي (X-Signature)، بيتحقق منه
+    // جوّه الكنترولر نفسه.
+    Route::post('/webhooks/ezonepay', [PaymentController::class, 'handleEzonePayWebhook']);
 
     // بدون auth:sanctum — مهمة يومية من ERPNext (send_appointment_reminders)، محمية بنفس توقيع HMAC
     Route::post('/webhooks/appointment-reminder', [WebhookController::class, 'handleAppointmentReminder']);

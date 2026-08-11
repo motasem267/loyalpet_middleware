@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Shop;
 use App\Http\Controllers\Controller;
 use App\Jobs\CreditWalletFromPayment;
 use App\Models\PaymentSession;
+use App\Services\EzonePayService;
 use App\Services\TlyncService;
 use Illuminate\Contracts\View\View;
 use Illuminate\Http\JsonResponse;
@@ -16,10 +17,10 @@ use Illuminate\Validation\ValidationException;
 class PaymentController extends Controller
 {
     /**
-     * بدء عملية شحن محفظة — يرجّع رابط صفحة الدفع المُستضافة عند TLYNC،
-     * التطبيق يفتحه في WebView.
+     * بدء عملية شحن محفظة — يرجّع رابط صفحة الدفع المُستضافة عند Ezone Pay (بديل TLYNC)،
+     * التطبيق يفتحه في WebView. رابط لمرة واحدة (MaxUsageCount=1) بمبلغ العملية بالظبط.
      */
-    public function topUp(Request $request, TlyncService $tlync): JsonResponse
+    public function topUp(Request $request, EzonePayService $ezonePay): JsonResponse
     {
         $validated = $request->validate([
             'amount' => ['required', 'numeric', 'min:1'],
@@ -37,31 +38,45 @@ class PaymentController extends Controller
             'expires_at' => now()->addMinutes(30),
         ]);
 
+        [$firstName, $lastName] = $this->splitName($user->name);
+
         try {
-            $result = $tlync->initiatePayment([
-                'amount' => $validated['amount'],
-                'phone' => $user->phone,
-                'email' => config('tlync.billing_email'),
-                'custom_ref' => $customRef,
-                'backend_url' => url('/api/v1/webhooks/tlync'),
-                'frontend_url' => route('payment.complete', ['reference' => $customRef]),
+            $result = $ezonePay->createPaymentLink([
+                'Amount' => $validated['amount'],
+                'OrderReference' => $customRef,
+                'RedirectUrl' => route('payment.complete', ['reference' => $customRef]),
+                'Customer' => [
+                    'FirstName' => $firstName,
+                    'LastName' => $lastName,
+                    'PhoneNumber' => $user->phone,
+                ],
             ]);
         } catch (\Throwable $e) {
             $session->update(['status' => 'failed']);
 
-            Log::error('[TLYNC] فشل بدء عملية الدفع: '.$e->getMessage());
+            Log::error('[EzonePay] فشل بدء عملية الدفع: '.$e->getMessage());
 
             throw ValidationException::withMessages([
                 'amount' => ['تعذر بدء عملية الدفع، حاول مرة أخرى'],
             ]);
         }
 
-        $session->update(['mypay_payment_url' => $result['url'] ?? null]);
+        $session->update([
+            'mypay_session_id' => $result['Id'] ?? null,
+            'mypay_payment_url' => $result['Link'] ?? null,
+        ]);
 
         return response()->json([
             'reference' => $session->id,
-            'payment_url' => $result['url'] ?? null,
+            'payment_url' => $result['Link'] ?? null,
         ], 201);
+    }
+
+    private function splitName(string $name): array
+    {
+        $parts = explode(' ', trim($name), 2);
+
+        return [$parts[0], $parts[1] ?? $parts[0]];
     }
 
     /**
@@ -119,8 +134,63 @@ class PaymentController extends Controller
     }
 
     /**
-     * صفحة عامة (بدون auth:sanctum) — TLYNC يحوّل متصفح/WebView العميل ليها بعد
-     * الدفع. بتعرض الحالة الحالية للعملية، ولو لسه pending بتعمل refresh تلقائي
+     * ⚠️ بعكس TLYNC، Ezone Pay بيوقّع الويبهوك فعليًا (X-Signature = HMAC-SHA256 على
+     * الـ raw body، بالـ SecretKey الراجع وقت POST /Webhook/subscribe) — التحقق من
+     * التوقيع كافي لتصديق الحدث، فمفيش نداء تحقق إضافي هنا (غير TLYNC).
+     */
+    public function handleEzonePayWebhook(Request $request): JsonResponse
+    {
+        $signature = $request->header('X-Signature');
+        $secret = (string) config('ezonepay.webhook_secret');
+        $expected = base64_encode(hash_hmac('sha256', $request->getContent(), $secret, true));
+
+        abort_unless($signature && hash_equals($expected, $signature), 401, 'invalid signature');
+
+        $data = json_decode($request->getContent(), true) ?? [];
+
+        if ((int) ($data['event'] ?? 0) !== 2) {
+            return response()->json(['status' => 'ignored']);
+        }
+
+        $customRef = $data['orderReference'] ?? null;
+        $transactionId = $data['transactionId'] ?? null;
+
+        if (! $customRef || ! $transactionId) {
+            Log::warning('[EzonePay:webhook] وصل بدون orderReference/transactionId: '.json_encode($data));
+
+            return response()->json(['status' => 'ignored']);
+        }
+
+        $session = PaymentSession::where('idempotency_key', $customRef)->first();
+
+        if (! $session) {
+            Log::warning('[EzonePay:webhook] مفيش PaymentSession مطابق لـ orderReference: '.$customRef);
+
+            return response()->json(['status' => 'ignored']);
+        }
+
+        $session->update(['webhook_received_at' => now()]);
+
+        if ($session->status === 'paid') {
+            return response()->json(['status' => 'ok']); // معالج قبل كده، تجاهل تكرار الويبهوك
+        }
+
+        // transactionId هو معرّف المعاملة الفريد من Ezone Pay نفسه — ده اللي بيتبعت
+        // لـ ERPNext كـ reference، مش idempotency_key بتاعنا إحنا.
+        $session->update([
+            'status' => 'paid',
+            'paid_at' => now(),
+            'gateway_reference' => (string) $transactionId,
+        ]);
+
+        CreditWalletFromPayment::dispatch($session);
+
+        return response()->json(['status' => 'ok']);
+    }
+
+    /**
+     * صفحة عامة (بدون auth:sanctum) — بوابة الدفع بتحوّل متصفح/WebView العميل ليها
+     * بعد الدفع. بتعرض الحالة الحالية للعملية، ولو لسه pending بتعمل refresh تلقائي
      * كام مرة (احتمال الويبهوك لسه ما وصلش).
      */
     public function complete(string $reference): View
