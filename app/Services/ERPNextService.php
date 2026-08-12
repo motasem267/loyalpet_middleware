@@ -73,4 +73,19 @@ class ERPNextService
     {
         return $this->client()->post("/api/method/{$method}", $params)->throw()->json();
     }
+
+    /**
+     * القيم الممكنة لخاصية variant (زي "دجاج"، "تونة" لخاصية "Wanby Flavors") —
+     * مش موجودة على المنتج (Template) نفسه، متخزّنة في Doctype منفصل "Item Attribute".
+     */
+    public function getItemAttributeValues(string $attributeName): array
+    {
+        $doc = $this->get('Item Attribute', $attributeName);
+
+        return collect($doc['item_attribute_values'] ?? [])
+            ->pluck('attribute_value')
+            ->filter()
+            ->values()
+            ->all();
+    }
 }

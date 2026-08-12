@@ -20,6 +20,11 @@ class SyncProducts extends Command
             'custom_show_in_app', 'custom_is_featured', 'custom_featured_order',
         ]);
 
+        // بنكاش قيم كل خاصية (attribute_name) جوّه تشغيلة sync:products الواحدة —
+        // منتجات كتير ممكن تشترك في نفس الخاصية (زي "Wanby Flavors")، فما نعيدش
+        // نفس نداء Item Attribute لكل منتج لوحده.
+        $attributeValuesCache = [];
+
         foreach ($items as $item) {
             // attributes (جدول فرعي) ما بيرجعش عبر getAll زي أي child table تاني —
             // بنجيبه بنداء إضافي للـ variants (variant_of موجود) وكمان للـ templates
@@ -30,10 +35,23 @@ class SyncProducts extends Command
             if (! empty($item['variant_of']) || ! empty($item['has_variants'])) {
                 $fullDoc = $erp->get('Item', $item['name']);
                 $attributes = collect($fullDoc['attributes'] ?? [])
-                    ->map(fn (array $row) => [
-                        'attribute' => $row['attribute'] ?? null,
-                        'attribute_value' => $row['attribute_value'] ?? null,
-                    ])
+                    ->map(function (array $row) use ($erp, &$attributeValuesCache) {
+                        $name = $row['attribute'] ?? null;
+                        $value = $row['attribute_value'] ?? null;
+
+                        // مفيش attribute_value على المنتج (Template) نفسه — يعني الخاصية دي
+                        // بس بتوصف "الأنواع الممكنة"، مش قيمة محددة، فبنجيب القيم الممكنة
+                        // كلها من Item Attribute بدل ما نرجّع null من غير فايدة.
+                        if (! $value && $name) {
+                            $attributeValuesCache[$name] ??= $erp->getItemAttributeValues($name);
+                        }
+
+                        return [
+                            'attribute' => $name,
+                            'attribute_value' => $value,
+                            'values' => $value ? [] : ($attributeValuesCache[$name] ?? []),
+                        ];
+                    })
                     ->all();
             }
 

@@ -34,7 +34,7 @@ class WebhookController extends Controller
         match ($doctype) {
             'Customer' => $this->handleCustomerEvent($data),
             'Sales Order' => $this->handleSalesOrderEvent($data),
-            'Item' => $this->handleItemUpdate($data),
+            'Item' => $this->handleItemUpdate($data, $erp),
             'Item Group' => $this->handleItemGroupUpdate($data),
             'Product Bundle' => $this->handleProductBundleUpdate($data, $erp),
             'Delivery Zone' => $this->handleDeliveryZoneUpdate($data),
@@ -218,7 +218,7 @@ class WebhookController extends Controller
      * ده الفاصل الوحيد اللي عندنا نفرّق بيه حذف عن إنشاء/تعديل، فبنسوفت-ديليت
      * (is_active=false) بدل ما نمسح الصف فعليًا، عشان الطلبات القديمة تفضل واضحة.
      */
-    private function handleItemUpdate(array $data): void
+    private function handleItemUpdate(array $data, ERPNextService $erp): void
     {
         if (! array_key_exists('item_name', $data)) {
             Product::where('erp_name', $data['name'])->update(['is_active' => false, 'updated_at' => now()]);
@@ -233,7 +233,7 @@ class WebhookController extends Controller
                 'item_name' => $data['item_name'] ?? $data['name'],
                 'item_group_erp_name' => $data['item_group'] ?: null,
                 'variant_of' => $data['variant_of'] ?: null,
-                'attributes' => $this->cleanAttributes($data['attributes'] ?? []),
+                'attributes' => $this->cleanAttributes($data['attributes'] ?? [], $erp),
                 'description' => $data['description'] ?: null,
                 'image_path' => $data['image'] ?: null,
                 'price' => $data['standard_rate'] ?? 0,
@@ -248,14 +248,31 @@ class WebhookController extends Controller
 
     /**
      * صفوف attributes من Frappe فيها حقول داخلية زيادة (creation, owner, idx...) —
-     * بنسيب بس attribute/attribute_value.
+     * بنسيب بس attribute/attribute_value. لو الصف من Template من غير قيمة محددة
+     * (attribute_value فاضي — بيوصف بس "الأنواع الممكنة")، بنجيب القيم الممكنة كلها
+     * من Item Attribute (زي "دجاج"، "تونة"...) بدل ما نرجّع null من غير فايدة.
      */
-    private function cleanAttributes(array $rows): array
+    private function cleanAttributes(array $rows, ERPNextService $erp): array
     {
-        return array_map(fn (array $row) => [
-            'attribute' => $row['attribute'] ?? null,
-            'attribute_value' => $row['attribute_value'] ?? null,
-        ], $rows);
+        return array_map(function (array $row) use ($erp) {
+            $name = $row['attribute'] ?? null;
+            $value = $row['attribute_value'] ?? null;
+
+            if (! $value && $name) {
+                try {
+                    $values = $erp->getItemAttributeValues($name);
+                } catch (\Throwable $e) {
+                    Log::warning('[Webhook:erp] فشل جلب قيم الخاصية '.$name.': '.$e->getMessage());
+                    $values = [];
+                }
+            }
+
+            return [
+                'attribute' => $name,
+                'attribute_value' => $value,
+                'values' => $value ? [] : ($values ?? []),
+            ];
+        }, $rows);
     }
 
     private function handleItemGroupUpdate(array $data): void
