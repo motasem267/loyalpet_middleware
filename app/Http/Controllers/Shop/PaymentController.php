@@ -61,14 +61,16 @@ class PaymentController extends Controller
             ]);
         }
 
+        // الرد راجع بـ camelCase (id, link...) مش PascalCase زي جدول التوثيق — تأكدنا
+        // من نفس النمط فعليًا في رد POST /Webhook/subscribe.
         $session->update([
-            'mypay_session_id' => $result['Id'] ?? null,
-            'mypay_payment_url' => $result['Link'] ?? null,
+            'mypay_session_id' => $result['id'] ?? null,
+            'mypay_payment_url' => $result['link'] ?? null,
         ]);
 
         return response()->json([
             'reference' => $session->id,
-            'payment_url' => $result['Link'] ?? null,
+            'payment_url' => $result['link'] ?? null,
         ], 201);
     }
 
@@ -148,7 +150,13 @@ class PaymentController extends Controller
 
         $data = json_decode($request->getContent(), true) ?? [];
 
-        if ((int) ($data['event'] ?? 0) !== 2) {
+        // ⚠️ رد POST /Webhook/subscribe رجّع event كـ نص "Paid" مش رقم 2 زي مثال
+        // الـ webhook payload في التوثيق — فبنقبل الاتنين هنا لحد ما نتأكد من شكل
+        // الـ payload الحقيقي وقت أول دفعة فعلية.
+        $event = $data['event'] ?? null;
+        $isPaid = $event === 2 || $event === '2' || (is_string($event) && strtolower($event) === 'paid');
+
+        if (! $isPaid) {
             return response()->json(['status' => 'ignored']);
         }
 
