@@ -16,17 +16,18 @@ class SyncProducts extends Command
     {
         $items = $erp->getAll('Item', fields: [
             'name', 'item_code', 'item_name', 'item_group', 'description',
-            'image', 'standard_rate', 'disabled', 'variant_of',
+            'image', 'standard_rate', 'disabled', 'variant_of', 'has_variants',
             'custom_show_in_app', 'custom_is_featured', 'custom_featured_order',
         ]);
 
         foreach ($items as $item) {
             // attributes (جدول فرعي) ما بيرجعش عبر getAll زي أي child table تاني —
-            // بنجيبه بنداء إضافي بس للـ variants (variant_of موجود)، مش لكل المنتجات،
-            // عشان ما نضاعفش عدد النداءات على كامل الكتالوج بلا داعي.
+            // بنجيبه بنداء إضافي للـ variants (variant_of موجود) وكمان للـ templates
+            // اللي عندها has_variants مفعّل حتى لو مالهاش variants فعلية لسه (بيُستخدم
+            // أحيانًا كـ "خصائص" على المنتج نفسه من غير ما يتعمل له variants حقيقية).
             $attributes = [];
 
-            if (! empty($item['variant_of'])) {
+            if (! empty($item['variant_of']) || ! empty($item['has_variants'])) {
                 $fullDoc = $erp->get('Item', $item['name']);
                 $attributes = collect($fullDoc['attributes'] ?? [])
                     ->map(fn (array $row) => [
