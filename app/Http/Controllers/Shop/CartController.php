@@ -39,6 +39,15 @@ class CartController extends Controller
             ]);
         }
 
+        // لو المنتج ده "Template" وعنده Variants حقيقية فعلًا (item_code بتوعهم
+        // موجودين في products)، مينفعش يتضاف للسلة بـ item_code بتاعه هو نفسه —
+        // لازم يتحدد Variant بعينه (حجم/نكهة) الأول من GET /products/{id}.
+        if ($product->variants()->exists()) {
+            throw ValidationException::withMessages([
+                'item_code' => ['لازم تختار الحجم/النكهة الأول قبل الإضافة للسلة'],
+            ]);
+        }
+
         $cart = Cart::firstOrCreate([
             'user_id' => $request->user()->id,
             'status' => 'active',
