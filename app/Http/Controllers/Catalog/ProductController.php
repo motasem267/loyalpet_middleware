@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Catalog;
 
 use App\Http\Controllers\Controller;
+use App\Models\Bundle;
 use App\Models\Product;
 use Illuminate\Contracts\Database\Eloquent\Builder;
 use Illuminate\Http\JsonResponse;
@@ -16,9 +17,7 @@ class ProductController extends Controller
      */
     public function index(Request $request): JsonResponse
     {
-        // variant_of != null معناه المنتج ده "عبوة/حجم" تابع لمنتج تاني (Item Variants) —
-        // بيظهر جوّه variants بتاع المنتج الأساسي بس، مش كسطر مستقل في القائمة الرئيسية.
-        $query = Product::query()->where('is_active', true)->where('show_in_app', true)->whereNull('variant_of');
+        $query = $this->baseQuery();
 
         if ($itemGroup = $request->query('item_group')) {
             $query->where('item_group_erp_name', $itemGroup);
@@ -37,15 +36,27 @@ class ProductController extends Controller
      */
     public function featured(Request $request): JsonResponse
     {
-        $query = Product::query()
-            ->where('is_active', true)
-            ->where('show_in_app', true)
+        $query = $this->baseQuery()
             ->where('is_featured', true)
-            ->whereNull('variant_of')
             ->orderBy('featured_order')
             ->orderBy('id');
 
         return response()->json($this->paginate($request, $query));
+    }
+
+    /**
+     * الصنف (Item) اللي بيمثّل باقة عند البيع (new_item_code بتاع Product Bundle) موجود
+     * أصلًا كـ Item عادي في ERPNext، فـ sync:products/الويبهوك بيسحبه لجدول products زي أي
+     * منتج تاني — بنستبعده هنا بس (مش وقت المزامنة) عشان يفضل موجود في الكاش المحلي
+     * (مطلوب مثلًا لصورة المنتج في تفاصيل الطلب) بس ما يظهرش مكرر جنب GET /bundles.
+     */
+    private function baseQuery(): Builder
+    {
+        return Product::query()
+            ->where('is_active', true)
+            ->where('show_in_app', true)
+            ->whereNull('variant_of')
+            ->whereNotIn('item_code', Bundle::query()->pluck('item_code'));
     }
 
     /**
