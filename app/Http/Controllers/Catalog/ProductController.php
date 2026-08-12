@@ -56,7 +56,7 @@ class ProductController extends Controller
             ->where('is_active', true)
             ->where('show_in_app', true)
             ->whereNull('variant_of')
-            ->whereNotIn('item_code', Bundle::query()->pluck('item_code'));
+            ->whereNotIn('item_code', Bundle::query()->whereNotNull('item_code')->pluck('item_code'));
     }
 
     /**
