@@ -26,6 +26,16 @@ Route::prefix('v1')->group(function () {
     Route::post('/auth/forgot-password', [AuthController::class, 'forgotPassword']);
     Route::post('/auth/reset-password', [AuthController::class, 'resetPassword']);
 
+    // بدون auth:sanctum — تصفح الكتالوج (تصنيفات/منتجات/باقات/مناطق توصيل) مفتوح
+    // للضيف من غير تسجيل دخول، عشان يقدر يتصفح المتجر قبل ما يعمل حساب.
+    Route::get('/categories', [CategoryController::class, 'index']);
+    Route::get('/products', [ProductController::class, 'index']);
+    Route::get('/products/featured', [ProductController::class, 'featured']);
+    Route::get('/products/{product}', [ProductController::class, 'show']);
+    Route::get('/bundles', [BundleController::class, 'index']);
+    Route::get('/bundles/{bundle}', [BundleController::class, 'show']);
+    Route::get('/delivery-zones', [DeliveryZoneController::class, 'index']);
+
     // بدون auth:sanctum — ERPNext مش مستخدم موبايل، الحماية عن طريق توقيع HMAC بس
     Route::post('/webhooks/erp', [WebhookController::class, 'handleErp']);
 
@@ -44,14 +54,6 @@ Route::prefix('v1')->group(function () {
         });
         Route::patch('/profile', [ProfileController::class, 'update']);
         Route::put('/profile/password', [ProfileController::class, 'changePassword']);
-
-        Route::get('/categories', [CategoryController::class, 'index']);
-        Route::get('/products', [ProductController::class, 'index']);
-        Route::get('/products/featured', [ProductController::class, 'featured']);
-        Route::get('/products/{product}', [ProductController::class, 'show']);
-        Route::get('/bundles', [BundleController::class, 'index']);
-        Route::get('/bundles/{bundle}', [BundleController::class, 'show']);
-        Route::get('/delivery-zones', [DeliveryZoneController::class, 'index']);
 
         Route::get('/favorites', [FavoriteController::class, 'index']);
         Route::post('/favorites', [FavoriteController::class, 'store']);

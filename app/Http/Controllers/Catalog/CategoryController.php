@@ -11,22 +11,16 @@ class CategoryController extends Controller
 {
     /**
      * يرجع مستوى واحد فقط من الشجرة (أبناء التصنيف المطلوب) — تصفح النزول درجة درجة.
-     * بدون parent: يرجع المستوى الأول تحت جذر الشجرة تلقائيًا (بدون افتراض اسم الجذر).
+     * بدون parent: يرجع أبناء "All Item Groups" — جذر شجرة Item Group الثابت في Frappe
+     * (مش قيمة ديناميكية بنكتشفها، اسم معروف وثابت).
      */
     public function index(Request $request): JsonResponse
     {
-        $parent = $request->query('parent');
+        $parent = $request->query('parent') ?: 'All Item Groups';
 
-        if (! $parent) {
-            $root = ItemGroup::whereNull('parent_erp_name')->first();
-            $parent = $root?->erp_name;
-        }
-
-        $children = $parent
-            ? ItemGroup::where('parent_erp_name', $parent)
-                ->where('is_active', true)
-                ->get(['erp_name', 'is_group', 'image_path'])
-            : collect();
+        $children = ItemGroup::where('parent_erp_name', $parent)
+            ->where('is_active', true)
+            ->get(['erp_name', 'is_group', 'image_path']);
 
         return response()->json(['data' => $children]);
     }
