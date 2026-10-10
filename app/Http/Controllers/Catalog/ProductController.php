@@ -75,9 +75,48 @@ class ProductController extends Controller
         return response()->json([
             'data' => [
                 ...$product->toArray(),
+                'attributes' => $this->availableAttributes($product->attributes ?? [], $variants),
                 'variants' => $variants,
             ],
         ]);
+    }
+
+    /**
+     * "values" على القالب جاية من Item Attribute كاملة (كل النكهات/الأحجام الممكنة في ERPNext)،
+     * فبنخلي فيها بس القيم اللي فعلًا عندها Variant نشط — والخاصية اللي ما بقاش فيها ولا قيمة
+     * بتنشال. لو القالب ما عندوش Variants أصلًا، بنرجّع الخصائص زي ما هي.
+     */
+    private function availableAttributes(array $attributes, $variants): array
+    {
+        if ($variants->isEmpty()) {
+            return $attributes;
+        }
+
+        $used = [];
+        foreach ($variants as $variant) {
+            foreach ($variant->attributes ?? [] as $row) {
+                if (! empty($row['attribute']) && ! empty($row['attribute_value'])) {
+                    $used[$row['attribute']][$row['attribute_value']] = true;
+                }
+            }
+        }
+
+        return collect($attributes)
+            ->map(function (array $row) use ($used) {
+                if (empty($row['values'])) {
+                    return $row;
+                }
+
+                $row['values'] = array_values(array_filter(
+                    $row['values'],
+                    fn ($value) => isset($used[$row['attribute']][$value])
+                ));
+
+                return $row;
+            })
+            ->filter(fn (array $row) => ! empty($row['attribute_value']) || ! empty($row['values']))
+            ->values()
+            ->all();
     }
 
     private function paginate(Request $request, Builder $query): array
