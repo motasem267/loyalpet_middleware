@@ -289,22 +289,36 @@ class WebhookController extends Controller
         );
     }
 
+    /**
+     * الـ Webhook Data في ERPNext بيبعت قائمة حقول محددة (مش الدوك كله)، فأي حقل جديد
+     * (زي custom_show_in_app) أو جدول items الفرعي ممكن ما يوصلش — عشان كده بنجيب
+     * الدوك كامل من ERPNext ونعتمد على "name" بس من الـ payload، زي sync:bundles بالظبط.
+     */
     private function handleProductBundleUpdate(array $data, ERPNextService $erp): void
     {
-        $item = $erp->get('Item', $data['new_item_code']);
+        $doc = $erp->get('Product Bundle', $data['name']);
+        $item = $erp->get('Item', $doc['new_item_code']);
 
-        Bundle::updateOrCreate(
-            ['erp_name' => $data['name']],
+        $bundle = Bundle::updateOrCreate(
+            ['erp_name' => $doc['name']],
             [
-                'item_code' => $data['new_item_code'],
-                'title' => $item['item_name'] ?? $data['new_item_code'],
-                'description' => $data['description'] ?: null,
+                'item_code' => $doc['new_item_code'],
+                'title' => $item['item_name'] ?? $doc['new_item_code'],
+                'description' => ($doc['description'] ?? null) ?: null,
                 'price' => $item['standard_rate'] ?? 0,
-                'image_path' => $data['custom_image'] ?: null,
+                'image_path' => ($doc['custom_image'] ?? null) ?: null,
                 'is_active' => ! ($item['disabled'] ?? false),
-                'show_in_app' => (bool) ($data['custom_show_in_app'] ?? true),
+                'show_in_app' => (bool) ($doc['custom_show_in_app'] ?? true),
                 'updated_at' => now(),
             ]
+        );
+
+        $bundle->items()->delete();
+        $bundle->items()->createMany(
+            collect($doc['items'] ?? [])->map(fn (array $row) => [
+                'item_code' => $row['item_code'],
+                'qty' => $row['qty'] ?? 1,
+            ])->all()
         );
     }
 
