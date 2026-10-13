@@ -10,6 +10,7 @@ use App\Models\Product;
 use App\Services\ERPNextService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Validation\ValidationException;
 
 class OrderController extends Controller
@@ -20,14 +21,28 @@ class OrderController extends Controller
      */
     public function store(Request $request): JsonResponse
     {
-        $validated = $request->validate([
-            'payment_method' => ['required', 'string', 'in:wallet,cash_on_delivery'],
-            'recipient_name' => ['required', 'string', 'max:150'],
-            'recipient_phone' => ['required', 'string', 'max:20'],
-            'delivery_address' => ['required', 'string', 'max:500'],
-            'delivery_date' => ['required', 'date', 'after_or_equal:today'],
-            'notes' => ['nullable', 'string', 'max:500'],
-        ]);
+        try {
+            $validated = $request->validate([
+                'payment_method' => ['required', 'string', 'in:wallet,cash_on_delivery'],
+                'recipient_name' => ['required', 'string', 'max:150'],
+                'recipient_phone' => ['required', 'string', 'max:20'],
+                'delivery_address' => ['required', 'string', 'max:500'],
+                'delivery_date' => ['required', 'date', 'after_or_equal:today'],
+                'notes' => ['nullable', 'string', 'max:500'],
+            ]);
+        } catch (ValidationException $e) {
+            // التطبيق بيعرض رسالة عامة لأي 422 — من غير السطر ده ما فيش طريقة نعرف
+            // أي حقل اترفض. بنسجل أسماء الحقول بس (مش قيمها) ما عدا الدفع والتاريخ.
+            Log::warning('[Orders] رفض بيانات الطلب', [
+                'user_id' => $request->user()->id,
+                'errors' => $e->errors(),
+                'fields' => array_keys($request->all()),
+                'payment_method' => $request->input('payment_method'),
+                'delivery_date' => $request->input('delivery_date'),
+            ]);
+
+            throw $e;
+        }
 
         $user = $request->user();
 
