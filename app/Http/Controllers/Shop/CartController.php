@@ -31,6 +31,7 @@ class CartController extends Controller
 
         $product = Product::where('item_code', $validated['item_code'])
             ->where('is_active', true)
+            ->where('show_in_app', true)
             ->first();
 
         if (! $product) {

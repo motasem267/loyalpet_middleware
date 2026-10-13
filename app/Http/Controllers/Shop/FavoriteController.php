@@ -7,12 +7,14 @@ use App\Models\Favorite;
 use App\Models\Product;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Validation\Rule;
 
 class FavoriteController extends Controller
 {
     public function index(Request $request): JsonResponse
     {
         $favorites = Favorite::where('user_id', $request->user()->id)
+            ->whereHas('product', fn ($query) => $query->where('is_active', true)->where('show_in_app', true))
             ->with('product')
             ->latest('created_at')
             ->get()
@@ -33,7 +35,7 @@ class FavoriteController extends Controller
     public function store(Request $request): JsonResponse
     {
         $validated = $request->validate([
-            'product_id' => ['required', 'integer', 'exists:products,id'],
+            'product_id' => ['required', 'integer', Rule::exists('products', 'id')->where('is_active', true)->where('show_in_app', true)],
         ]);
 
         Favorite::firstOrCreate([
