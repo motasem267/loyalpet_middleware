@@ -15,7 +15,7 @@ class BundleController extends Controller
     public function index(): JsonResponse
     {
         return response()->json([
-            'data' => Bundle::where('is_active', true)->get(),
+            'data' => Bundle::where('is_active', true)->where('show_in_app', true)->get(),
         ]);
     }
 
@@ -25,6 +25,8 @@ class BundleController extends Controller
      */
     public function show(Bundle $bundle): JsonResponse
     {
+        abort_unless($bundle->is_active && $bundle->show_in_app, 404, 'الباقة غير موجودة');
+
         $bundle->load('items.product');
 
         return response()->json([

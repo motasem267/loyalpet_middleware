@@ -302,6 +302,7 @@ class WebhookController extends Controller
                 'price' => $item['standard_rate'] ?? 0,
                 'image_path' => $data['custom_image'] ?: null,
                 'is_active' => ! ($item['disabled'] ?? false),
+                'show_in_app' => (bool) ($data['custom_show_in_app'] ?? true),
                 'updated_at' => now(),
             ]
         );

@@ -23,6 +23,11 @@ class SyncBundles extends Command
             // اسم الباقة وسعرها بياخدوهم من الصنف (Item) اللي بيمثل الباقة عند البيع
             $item = $erp->get('Item', $bundleData['new_item_code']);
 
+            // محتويات الباقة (جدول "items" الفرعي) مش بيترجع في getAll، لازم نجيب الدوك كامل.
+            // custom_show_in_app كمان بناخده من هنا مش من fields فوق — لو الحقل لسه مش
+            // متضاف في ERPNext، getAll كانت هتفشل، هنا بس بيرجع null فبنعتبرها ظاهرة.
+            $fullDoc = $erp->get('Product Bundle', $bundleData['name']);
+
             $bundle = Bundle::updateOrCreate(
                 ['erp_name' => $bundleData['name']],
                 [
@@ -32,12 +37,10 @@ class SyncBundles extends Command
                     'price' => $item['standard_rate'] ?? 0,
                     'image_path' => $bundleData['custom_image'] ?: null,
                     'is_active' => ! ($item['disabled'] ?? false),
+                    'show_in_app' => (bool) ($fullDoc['custom_show_in_app'] ?? true),
                     'updated_at' => now(),
                 ]
             );
-
-            // محتويات الباقة (جدول "items" الفرعي) مش بيترجع في getAll، لازم نجيب الدوك كامل
-            $fullDoc = $erp->get('Product Bundle', $bundleData['name']);
 
             $bundle->items()->delete();
             $bundle->items()->createMany(

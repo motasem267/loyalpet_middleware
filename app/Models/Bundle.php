@@ -7,7 +7,7 @@ use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 
-#[Fillable(['erp_name', 'item_code', 'title', 'description', 'price', 'image_path', 'is_active'])]
+#[Fillable(['erp_name', 'item_code', 'title', 'description', 'price', 'image_path', 'is_active', 'show_in_app'])]
 class Bundle extends Model
 {
     use HasErpImage;
@@ -21,6 +21,7 @@ class Bundle extends Model
         return [
             'price' => 'decimal:2',
             'is_active' => 'boolean',
+            'show_in_app' => 'boolean',
             'updated_at' => 'datetime',
         ];
     }
