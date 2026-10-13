@@ -32,7 +32,7 @@ class AuthController extends Controller
             'name' => $validated['name'],
             'phone' => $validated['phone'],
             'password' => $validated['password'],
-            'address' => $validated['address'],
+            'address' => $validated['address'] ?? null,
             'is_active' => false,
         ]);
 
