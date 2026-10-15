@@ -13,6 +13,7 @@ use App\Models\User;
 use App\Services\ERPNextService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 
@@ -30,6 +31,18 @@ class WebhookController extends Controller
         // فـ $request->all() ما بيتعرفش على الـ body كـ JSON — بنفكّه من الـ raw body مباشرة.
         $data = json_decode($request->getContent(), true) ?? [];
         $doctype = $data['doctype'] ?? null;
+
+        // إعادة التسمية (Rename) في ERPNext بتغيّر الـ name نفسه، والويبهوك العادي بيوصل بالاسم
+        // الجديد بس — فكان بيتخلق سجل جديد ويفضل القديم والمنتجات مربوطة بيه. الحدث ده
+        // بيتبعت من hook الـ after_rename في تطبيق loyalpet ومعاه الاسمين.
+        if (($data['event'] ?? null) === 'renamed') {
+            match ($doctype) {
+                'Item Group' => $this->handleItemGroupRename($data),
+                default => Log::info('[Webhook:erp] rename غير معالج لـ '.($doctype ?? 'null')),
+            };
+
+            return response()->json(['status' => 'ok']);
+        }
 
         match ($doctype) {
             'Customer' => $this->handleCustomerEvent($data),
@@ -287,6 +300,34 @@ class WebhookController extends Controller
                 'updated_at' => now(),
             ]
         );
+    }
+
+    /**
+     * لو الويبهوك العادي (بالاسم الجديد) وصل قبل حدث الـ rename، يبقى السجل الجديد موجود
+     * أصلًا بأحدث بيانات — فبنمسح القديم بس. في الحالتين بننقل المنتجات والفروع للاسم
+     * الجديد. آمنة لو اتكررت (نفس الحدث مرتين ما بيبوظش حاجة).
+     */
+    private function handleItemGroupRename(array $data): void
+    {
+        $oldName = $data['old_name'] ?? null;
+        $newName = $data['new_name'] ?? null;
+
+        abort_unless($oldName && $newName, 422, 'old_name و new_name مطلوبين');
+
+        if ($oldName === $newName) {
+            return;
+        }
+
+        DB::transaction(function () use ($oldName, $newName) {
+            if (ItemGroup::where('erp_name', $newName)->exists()) {
+                ItemGroup::where('erp_name', $oldName)->delete();
+            } else {
+                ItemGroup::where('erp_name', $oldName)->update(['erp_name' => $newName, 'updated_at' => now()]);
+            }
+
+            ItemGroup::where('parent_erp_name', $oldName)->update(['parent_erp_name' => $newName, 'updated_at' => now()]);
+            Product::where('item_group_erp_name', $oldName)->update(['item_group_erp_name' => $newName, 'updated_at' => now()]);
+        });
     }
 
     /**
