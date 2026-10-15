@@ -35,10 +35,13 @@ class WebhookController extends Controller
         // إعادة التسمية (Rename) في ERPNext بتغيّر الـ name نفسه، والويبهوك العادي بيوصل بالاسم
         // الجديد بس — فكان بيتخلق سجل جديد ويفضل القديم والمنتجات مربوطة بيه. الحدث ده
         // بيتبعت من hook الـ after_rename في تطبيق loyalpet ومعاه الاسمين.
-        if (($data['event'] ?? null) === 'renamed') {
+        if (($data['event'] ?? null) === 'renamed' || isset($data['old_name'], $data['new_name'])) {
+            // warning مش info — LOG_LEVEL في البرودكشن warning، ومن غيره ما فيش أثر نتتبع بيه
+            Log::warning('[Webhook:erp] rename', $data);
+
             match ($doctype) {
                 'Item Group' => $this->handleItemGroupRename($data),
-                default => Log::info('[Webhook:erp] rename غير معالج لـ '.($doctype ?? 'null')),
+                default => Log::warning('[Webhook:erp] rename غير معالج لـ '.($doctype ?? 'null')),
             };
 
             return response()->json(['status' => 'ok']);
