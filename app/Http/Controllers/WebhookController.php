@@ -40,7 +40,7 @@ class WebhookController extends Controller
             Log::warning('[Webhook:erp] rename', $data);
 
             match ($doctype) {
-                'Item Group' => $this->handleItemGroupRename($data),
+                'Item Group' => $this->handleItemGroupRename($data, $erp),
                 default => Log::warning('[Webhook:erp] rename غير معالج لـ '.($doctype ?? 'null')),
             };
 
@@ -308,9 +308,10 @@ class WebhookController extends Controller
     /**
      * لو الويبهوك العادي (بالاسم الجديد) وصل قبل حدث الـ rename، يبقى السجل الجديد موجود
      * أصلًا بأحدث بيانات — فبنمسح القديم بس. في الحالتين بننقل المنتجات والفروع للاسم
-     * الجديد. آمنة لو اتكررت (نفس الحدث مرتين ما بيبوظش حاجة).
+     * الجديد. آمنة لو اتكررت (نفس الحدث مرتين ما بيبوظش حاجة). ولو الاسم القديم أصلًا
+     * مش موجود عندنا (الكاش مش متزامن) ولا الجديد، بنجيب المجموعة من ERPNext ونضيفها.
      */
-    private function handleItemGroupRename(array $data): void
+    private function handleItemGroupRename(array $data, ERPNextService $erp): void
     {
         $oldName = $data['old_name'] ?? null;
         $newName = $data['new_name'] ?? null;
@@ -331,6 +332,10 @@ class WebhookController extends Controller
             ItemGroup::where('parent_erp_name', $oldName)->update(['parent_erp_name' => $newName, 'updated_at' => now()]);
             Product::where('item_group_erp_name', $oldName)->update(['item_group_erp_name' => $newName, 'updated_at' => now()]);
         });
+
+        if (! ItemGroup::where('erp_name', $newName)->exists()) {
+            $this->handleItemGroupUpdate($erp->get('Item Group', $newName));
+        }
     }
 
     /**
