@@ -8,6 +8,7 @@ use App\Models\Cart;
 use App\Models\PendingSync;
 use App\Models\Product;
 use App\Services\ERPNextService;
+use App\Services\OrderTelegramNotifier;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -211,7 +212,7 @@ class OrderController extends Controller
      * items لو اتبعتت بتستبدل أصناف الطلب كلها، والسعر دايمًا من الكاش المحلي (مش من التطبيق).
      * {order} = رقم الطلب في ERPNext، أو reference (رقم) لطلب لسه في الطابور.
      */
-    public function update(Request $request, string $order, ERPNextService $erp): JsonResponse
+    public function update(Request $request, string $order, ERPNextService $erp, OrderTelegramNotifier $notifier): JsonResponse
     {
         $validated = $request->validate([
             'payment_method' => ['sometimes', 'string', Rule::in(array_keys(config('payment.methods')))],
@@ -241,8 +242,11 @@ class OrderController extends Controller
 
         if (ctype_digit($order)) {
             $resend = false;
+            $before = [];
 
-            $sync = $this->withQueuedOrder($request, (int) $order, function (PendingSync $sync) use ($changes, $receipt, &$resend) {
+            $sync = $this->withQueuedOrder($request, (int) $order, function (PendingSync $sync) use ($changes, $receipt, &$resend, &$before) {
+                $before = $sync->payload;
+
                 $this->ensureReceiptMatchesMethod($sync->payload['payment_method'] ?? null, $changes['payment_method'] ?? null, (bool) $receipt);
 
                 $payload = array_merge($sync->payload, $changes);
@@ -270,6 +274,8 @@ class OrderController extends Controller
             if ($resend) {
                 SyncToERPNext::dispatch($sync);
             }
+
+            $notifier->updated("مرجع #{$sync->id} (مازال ما وصلش للنظام)", $request->user(), $before, $changes, (bool) $receipt);
 
             return response()->json([
                 'message' => 'تم تعديل الطلب',
@@ -305,6 +311,8 @@ class OrderController extends Controller
             ...$changes,
         ]);
 
+        $notifier->updated($order, $request->user(), OrderTelegramNotifier::fromErpDoc($doc), $changes, (bool) $receipt);
+
         return response()->json([
             'message' => 'تم تعديل الطلب',
             'data' => $result,
@@ -315,12 +323,16 @@ class OrderController extends Controller
      * "حذف" الطلب = إلغاؤه — طلب Sales Order معتمد في ERPNext ما بيتمسحش، بيتلغى (Cancel)
      * ويفضل مسجل للحسابات والمخزون. الطلب اللي لسه في الطابور بيتلغى محليًا وما يتبعتش.
      */
-    public function destroy(Request $request, string $order, ERPNextService $erp): JsonResponse
+    public function destroy(Request $request, string $order, ERPNextService $erp, OrderTelegramNotifier $notifier): JsonResponse
     {
         if (ctype_digit($order)) {
             $this->withQueuedOrder($request, (int) $order, function (PendingSync $sync) {
                 $sync->update(['status' => 'cancelled']);
             });
+
+            // الطلب ده عمره ما هيوصل ERPNext، فمفيش ويبهوك حالة هيبلّغ بالإلغاء — بنبلّغ هنا.
+            // إلغاء طلب في ERPNext بيوصل إشعاره من ويبهوك تغيير الحالة (WebhookController).
+            $notifier->cancelled("مرجع #{$order} (مازال ما وصلش للنظام)", $request->user());
 
             return response()->json(['message' => 'تم إلغاء الطلب']);
         }

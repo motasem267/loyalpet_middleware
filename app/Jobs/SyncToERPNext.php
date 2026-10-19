@@ -5,6 +5,7 @@ namespace App\Jobs;
 use App\Models\OrderStatusHistory;
 use App\Models\PendingSync;
 use App\Services\ERPNextService;
+use App\Services\OrderTelegramNotifier;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
 use Illuminate\Http\Client\RequestException;
@@ -111,6 +112,8 @@ class SyncToERPNext implements ShouldQueue
                 'payload' => [...$payload, 'rejection_message' => $message],
             ]);
 
+            app(OrderTelegramNotifier::class)->createFailed($this->sync->fresh(), $message);
+
             return;
         }
 
@@ -120,10 +123,8 @@ class SyncToERPNext implements ShouldQueue
             'synced_at' => now(),
         ]);
 
-        // الإيصال بقى في ERPNext — النسخة المحلية ما عادش ليها لازمة
-        if (! empty($payload['transfer_receipt_path'])) {
-            Storage::delete($payload['transfer_receipt_path']);
-        }
+        // الإيصال المحلي بيتبعت للتليجرام مع الإشعار وبعدها بيتمسح (بقى في ERPNext خلاص)
+        app(OrderTelegramNotifier::class)->created($this->sync->fresh(), $result['name']);
 
         OrderStatusHistory::create([
             'erp_order' => $result['name'],

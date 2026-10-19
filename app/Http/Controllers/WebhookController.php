@@ -11,6 +11,7 @@ use App\Models\OrderStatusHistory;
 use App\Models\Product;
 use App\Models\User;
 use App\Services\ERPNextService;
+use App\Services\OrderTelegramNotifier;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -165,6 +166,11 @@ class WebhookController extends Controller
             'new_status' => $newStatus,
             'changed_by' => 'erpnext',
         ]);
+
+        // نفس الحالة ممكن توصل مرتين (مثلًا الحالة الأولى اتسجلت وقت الإنشاء في SyncToERPNext)
+        if ($oldStatus !== $newStatus) {
+            app(OrderTelegramNotifier::class)->statusChanged($data['name'], $oldStatus, $newStatus, $userId ? User::find($userId) : null);
+        }
     }
 
     /**
