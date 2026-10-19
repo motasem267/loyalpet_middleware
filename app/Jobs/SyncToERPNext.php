@@ -7,6 +7,7 @@ use App\Models\PendingSync;
 use App\Services\ERPNextService;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
+use Illuminate\Http\Client\RequestException;
 
 class SyncToERPNext implements ShouldQueue
 {
@@ -59,11 +60,10 @@ class SyncToERPNext implements ShouldQueue
     }
 
     /**
-     * loyalpet.api.orders.create_sales_order بيتأكد فورًا من طريقة الدفع:
-     * - cash_on_delivery → "قيد التوصيل" مباشرة.
-     * - wallet → بيتأكد الرصيد كافي بس (من غير خصم فعلي، ده بيحصل وقت الفوترة)؛
-     *   لو مش كافي يرجع workflow_state = "خطأ في عملية الدفع" (مش خطأ HTTP —
-     *   الطلب بينخلق في ERPNext في الحالتين، بس بحالة مختلفة).
+     * loyalpet.api.orders.create_sales_order بيرفض طلب المحفظة لو الرصيد ما يكفيش
+     * (frappe.throw "الرصيد غير كافٍ في المحفظة") — ده رفض نهائي مش عطل، فما بنعيدش
+     * المحاولة: بنعلّم الطلب فشل ونحفظ الرسالة عشان تظهر للزبون، وهو يعدّل الطلب
+     * (PATCH /orders/{reference}) فيرجع للطابور.
      */
     private function processSalesOrder(ERPNextService $erp): void
     {
@@ -74,7 +74,8 @@ class SyncToERPNext implements ShouldQueue
             throw new \RuntimeException('العميل لسه ما اتزامنش مع ERPNext');
         }
 
-        $result = $this->unwrap($erp->callMethod('loyalpet.api.orders.create_sales_order', [
+        try {
+            $result = $this->unwrap($erp->callMethod('loyalpet.api.orders.create_sales_order', [
             'customer_id' => $user->erp_customer_id,
             'items' => $payload['items'],
             'payment_method' => $payload['payment_method'],
@@ -83,7 +84,23 @@ class SyncToERPNext implements ShouldQueue
             'delivery_address' => $payload['delivery_address'],
             'delivery_date' => $payload['delivery_date'],
             'notes' => $payload['notes'] ?? null,
-        ]));
+            ]));
+        } catch (RequestException $e) {
+            if ($e->response->status() >= 500) {
+                throw $e;
+            }
+
+            $message = ERPNextService::errorMessage($e->response->json() ?? []) ?? 'تعذر إنشاء الطلب';
+
+            $this->sync->update([
+                'status' => 'failed',
+                'attempts' => $this->tries,
+                'error' => $message,
+                'payload' => [...$payload, 'rejection_message' => $message],
+            ]);
+
+            return;
+        }
 
         $this->sync->update([
             'status' => 'done',

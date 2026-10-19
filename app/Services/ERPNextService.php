@@ -88,4 +88,25 @@ class ERPNextService
             ->values()
             ->all();
     }
+
+    /**
+     * Frappe بيحط رسالة frappe.throw في _server_messages (JSON string لـ list من JSON
+     * strings، كل واحدة فيها message) — أو في exception كـ "frappe.exceptions.X: الرسالة".
+     */
+    public static function errorMessage(array $body): ?string
+    {
+        foreach (json_decode($body['_server_messages'] ?? '[]', true) ?: [] as $raw) {
+            $message = json_decode($raw, true)['message'] ?? null;
+
+            if ($message) {
+                return strip_tags($message);
+            }
+        }
+
+        if (isset($body['exception'])) {
+            return trim(preg_replace('/^[\w.]+:\s*/', '', $body['exception']));
+        }
+
+        return null;
+    }
 }

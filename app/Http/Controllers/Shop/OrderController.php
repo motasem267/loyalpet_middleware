@@ -121,6 +121,7 @@ class OrderController extends Controller
                     'grand_total' => null,
                     'transaction_date' => $sync->created_at,
                     'reference' => $sync->id,
+                    'error_message' => $sync->payload['rejection_message'] ?? null,
                 ]);
         }
 
@@ -213,9 +214,25 @@ class OrderController extends Controller
         }
 
         if (ctype_digit($order)) {
-            $sync = $this->withQueuedOrder($request, (int) $order, function (PendingSync $sync) use ($changes) {
-                $sync->update(['payload' => array_merge($sync->payload, $changes)]);
+            $resend = false;
+
+            $sync = $this->withQueuedOrder($request, (int) $order, function (PendingSync $sync) use ($changes, &$resend) {
+                $payload = array_merge($sync->payload, $changes);
+                unset($payload['rejection_message']);
+
+                // طلب رفضه ERPNext (مثلًا الرصيد ما يكفيش) وما عادش بيتعاد لوحده — بعد
+                // تعديل الزبون (مثلًا غيّر للدفع عند الاستلام) بنرجعه للطابور من الأول
+                $resend = $sync->status === 'failed';
+
+                $sync->update([
+                    'payload' => $payload,
+                    ...($resend ? ['status' => 'pending', 'attempts' => 0, 'error' => null] : []),
+                ]);
             });
+
+            if ($resend) {
+                SyncToERPNext::dispatch($sync);
+            }
 
             return response()->json([
                 'message' => 'تم تعديل الطلب',
@@ -225,8 +242,14 @@ class OrderController extends Controller
 
         $this->ensureEditableErpOrder($request, $order, $erp);
 
+        // ERPNext: الحقل اللي ما اتبعتش ما بيتغيرش، و"" بيمسحه — وLaravel بيحوّل "" لـ null
+        // (ConvertEmptyStringsToNull)، فبنرجّع الملاحظات الممسوحة "" قبل الإرسال
+        if (array_key_exists('notes', $changes) && $changes['notes'] === null) {
+            $changes['notes'] = '';
+        }
+
         $result = $this->callOrderMethod($erp, 'loyalpet.api.orders.update_sales_order', [
-            'order_name' => $order,
+            'name' => $order,
             'customer_id' => $request->user()->erp_customer_id,
             ...$changes,
         ]);
@@ -254,7 +277,7 @@ class OrderController extends Controller
         $this->ensureEditableErpOrder($request, $order, $erp);
 
         $this->callOrderMethod($erp, 'loyalpet.api.orders.cancel_sales_order', [
-            'order_name' => $order,
+            'name' => $order,
             'customer_id' => $request->user()->erp_customer_id,
         ]);
 
@@ -280,6 +303,7 @@ class OrderController extends Controller
             'name' => null,
             'reference' => $sync->id,
             'status' => $sync->status === 'failed' ? 'فشل الإرسال' : 'جاري الإرسال',
+            'error_message' => $payload['rejection_message'] ?? null,
             'custom_workflow_state' => null,
             'transaction_date' => $sync->created_at,
             'delivery_date' => $payload['delivery_date'] ?? null,
@@ -394,34 +418,13 @@ class OrderController extends Controller
             }
 
             throw ValidationException::withMessages([
-                'order' => [$this->frappeErrorMessage($e->response->json() ?? []) ?? 'تعذر تنفيذ العملية'],
+                'order' => [ERPNextService::errorMessage($e->response->json() ?? []) ?? 'تعذر تنفيذ العملية'],
             ]);
         }
 
         $data = $result['message'] ?? $result;
 
         return is_array($data) ? $data : [];
-    }
-
-    /**
-     * Frappe بيحط رسالة frappe.throw في _server_messages (JSON string لـ list من JSON
-     * strings، كل واحدة فيها message) — أو في exception كـ "frappe.exceptions.X: الرسالة".
-     */
-    private function frappeErrorMessage(array $body): ?string
-    {
-        foreach (json_decode($body['_server_messages'] ?? '[]', true) ?: [] as $raw) {
-            $message = json_decode($raw, true)['message'] ?? null;
-
-            if ($message) {
-                return strip_tags($message);
-            }
-        }
-
-        if (isset($body['exception'])) {
-            return trim(preg_replace('/^[\w.]+:\s*/', '', $body['exception']));
-        }
-
-        return null;
     }
 
     /**
