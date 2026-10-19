@@ -12,14 +12,29 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Storage;
+use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
 
 class OrderController extends Controller
 {
     /**
-     * الحالة الوحيدة (custom_workflow_state) اللي الزبون يقدر فيها يعدّل أو يلغي الطلب.
+     * الحالات (custom_workflow_state) اللي الزبون يقدر فيها يعدّل أو يلغي الطلب — طلب
+     * الحوالة بيبدأ "بانتظار تأكيد الحوالة" لحد ما الموظف يراجع الإيصال.
      */
-    private const EDITABLE_STATE = 'قيد المراجعة';
+    private const EDITABLE_STATES = ['قيد المراجعة', 'بانتظار تأكيد الحوالة'];
+
+    private const RECEIPT_RULES = ['image', 'mimes:jpg,jpeg,png', 'max:5120'];
+
+    // رسائل الإيصال بالعربي — التطبيق بيعرض رسالة الـ 422 للزبون زي ما هي
+    private const RECEIPT_MESSAGES = [
+        'transfer_receipt.required_if' => 'ارفع صورة إيصال الحوالة',
+        'transfer_receipt.prohibited_unless' => 'صورة الإيصال مطلوبة فقط مع الدفع بالحوالة',
+        'transfer_receipt.image' => 'صورة الإيصال لازم تكون صورة (jpg أو png)',
+        'transfer_receipt.mimes' => 'صورة الإيصال لازم تكون صورة (jpg أو png)',
+        'transfer_receipt.max' => 'حجم صورة الإيصال لازم يكون أقل من 5 ميغا',
+        'payment_method.in' => 'طريقة الدفع غير متاحة',
+    ];
 
     /**
      * إنشاء طلب من السلة النشطة الحالية — الكتابة دايمًا عبر الطابور (pending_syncs)،
@@ -29,13 +44,14 @@ class OrderController extends Controller
     {
         try {
             $validated = $request->validate([
-                'payment_method' => ['required', 'string', 'in:wallet,cash_on_delivery'],
+                'payment_method' => ['required', 'string', Rule::in(array_keys(config('payment.methods')))],
+                'transfer_receipt' => ['required_if:payment_method,bank_transfer', 'prohibited_unless:payment_method,bank_transfer', ...self::RECEIPT_RULES],
                 'recipient_name' => ['required', 'string', 'max:150'],
                 'recipient_phone' => ['required', 'string', 'max:20'],
                 'delivery_address' => ['required', 'string', 'max:500'],
                 'delivery_date' => ['required', 'date', 'after_or_equal:today'],
                 'notes' => ['nullable', 'string', 'max:500'],
-            ]);
+            ], self::RECEIPT_MESSAGES);
         } catch (ValidationException $e) {
             // التطبيق بيعرض رسالة عامة لأي 422 — من غير السطر ده ما فيش طريقة نعرف
             // أي حقل اترفض. بنسجل أسماء الحقول بس (مش قيمها) ما عدا الدفع والتاريخ.
@@ -69,11 +85,16 @@ class OrderController extends Controller
             'rate' => (float) $item->price_at_add,
         ])->values()->all();
 
+        // الإيصال بيتحفظ هنا لحد ما SyncToERPNext يرفعه لـ ERPNext — لو ERPNext واقع
+        // وقت الطلب، الصورة ما تضيعش
+        $receiptPath = $request->file('transfer_receipt')?->store('transfer-receipts');
+
         $sync = PendingSync::create([
             'user_id' => $user->id,
             'action' => 'create',
             'doctype' => 'Sales Order',
             'payload' => [
+                ...($receiptPath ? ['transfer_receipt_path' => $receiptPath] : []),
                 'items' => $items,
                 'payment_method' => $validated['payment_method'],
                 'recipient_name' => $validated['recipient_name'],
@@ -178,6 +199,9 @@ class OrderController extends Controller
         abort_unless(($doc['customer'] ?? null) === $request->user()->erp_customer_id, 403);
 
         $doc['items'] = $this->withProductImages($doc['items'] ?? []);
+        $doc['transfer_receipt_url'] = ! empty($doc['custom_transfer_receipt'])
+            ? url("/api/v1/orders/{$doc['name']}/transfer-receipt")
+            : null;
 
         return response()->json(['data' => $doc]);
     }
@@ -190,7 +214,8 @@ class OrderController extends Controller
     public function update(Request $request, string $order, ERPNextService $erp): JsonResponse
     {
         $validated = $request->validate([
-            'payment_method' => ['sometimes', 'string', 'in:wallet,cash_on_delivery'],
+            'payment_method' => ['sometimes', 'string', Rule::in(array_keys(config('payment.methods')))],
+            'transfer_receipt' => ['sometimes', ...self::RECEIPT_RULES],
             'recipient_name' => ['sometimes', 'string', 'max:150'],
             'recipient_phone' => ['sometimes', 'string', 'max:20'],
             'delivery_address' => ['sometimes', 'string', 'max:500'],
@@ -199,7 +224,7 @@ class OrderController extends Controller
             'items' => ['sometimes', 'array', 'min:1'],
             'items.*.item_code' => ['required', 'string', 'distinct'],
             'items.*.qty' => ['required', 'numeric', 'min:0.001'],
-        ]);
+        ], self::RECEIPT_MESSAGES);
 
         if (! $validated) {
             throw ValidationException::withMessages([
@@ -207,7 +232,8 @@ class OrderController extends Controller
             ]);
         }
 
-        $changes = collect($validated)->except('items')->all();
+        $changes = collect($validated)->except(['items', 'transfer_receipt'])->all();
+        $receipt = $request->file('transfer_receipt');
 
         if (isset($validated['items'])) {
             $changes['items'] = $this->buildOrderItems($validated['items']);
@@ -216,9 +242,20 @@ class OrderController extends Controller
         if (ctype_digit($order)) {
             $resend = false;
 
-            $sync = $this->withQueuedOrder($request, (int) $order, function (PendingSync $sync) use ($changes, &$resend) {
+            $sync = $this->withQueuedOrder($request, (int) $order, function (PendingSync $sync) use ($changes, $receipt, &$resend) {
+                $this->ensureReceiptMatchesMethod($sync->payload['payment_method'] ?? null, $changes['payment_method'] ?? null, (bool) $receipt);
+
                 $payload = array_merge($sync->payload, $changes);
                 unset($payload['rejection_message']);
+
+                if ($receipt) {
+                    if (! empty($payload['transfer_receipt_path'])) {
+                        Storage::delete($payload['transfer_receipt_path']);
+                    }
+
+                    $payload['transfer_receipt_path'] = $receipt->store('transfer-receipts');
+                    unset($payload['transfer_receipt_url']);
+                }
 
                 // طلب رفضه ERPNext (مثلًا الرصيد ما يكفيش) وما عادش بيتعاد لوحده — بعد
                 // تعديل الزبون (مثلًا غيّر للدفع عند الاستلام) بنرجعه للطابور من الأول
@@ -240,7 +277,21 @@ class OrderController extends Controller
             ]);
         }
 
-        $this->ensureEditableErpOrder($request, $order, $erp);
+        $doc = $this->ensureEditableErpOrder($request, $order, $erp);
+
+        $this->ensureReceiptMatchesMethod($doc['custom_payment_method'] ?? null, $changes['payment_method'] ?? null, (bool) $receipt);
+
+        if ($receipt) {
+            try {
+                $changes['transfer_receipt'] = $erp->uploadFile($receipt->getRealPath(), $receipt->hashName());
+            } catch (\Throwable $e) {
+                Log::error('[Orders] فشل رفع إيصال الحوالة لـ ERPNext: '.$e->getMessage());
+
+                throw ValidationException::withMessages([
+                    'transfer_receipt' => ['تعذر رفع صورة الإيصال، حاول مرة أخرى'],
+                ]);
+            }
+        }
 
         // ERPNext: الحقل اللي ما اتبعتش ما بيتغيرش، و"" بيمسحه — وLaravel بيحوّل "" لـ null
         // (ConvertEmptyStringsToNull)، فبنرجّع الملاحظات الممسوحة "" قبل الإرسال
@@ -284,6 +335,66 @@ class OrderController extends Controller
         return response()->json(['message' => 'تم إلغاء الطلب']);
     }
 
+    /**
+     * صورة إيصال الحوالة — الملف خاص (محفوظ عند لارافيل لطلب في الطابور، أو /private/files
+     * في ERPNext)، فالتطبيق بيفتحه من هنا بالتوكن بتاعه بدل رابط مباشر.
+     */
+    public function transferReceipt(Request $request, string $order, ERPNextService $erp)
+    {
+        if (ctype_digit($order)) {
+            $sync = PendingSync::where('id', (int) $order)
+                ->where('user_id', $request->user()->id)
+                ->where('doctype', 'Sales Order')
+                ->first();
+
+            abort_if(! $sync, 404, 'الطلب غير موجود');
+
+            $path = $sync->payload['transfer_receipt_path'] ?? null;
+
+            if ($path && Storage::exists($path)) {
+                return response()->file(Storage::path($path));
+            }
+
+            abort_if(! $sync->erp_name, 404, 'لا يوجد إيصال لهذا الطلب');
+
+            $order = $sync->erp_name;
+        }
+
+        try {
+            $doc = $erp->get('Sales Order', $order);
+        } catch (\Illuminate\Http\Client\RequestException $e) {
+            abort(404, 'الطلب غير موجود');
+        }
+
+        abort_unless(($doc['customer'] ?? null) === $request->user()->erp_customer_id, 403);
+        abort_if(empty($doc['custom_transfer_receipt']), 404, 'لا يوجد إيصال لهذا الطلب');
+
+        $file = $erp->downloadFile($doc['custom_transfer_receipt']);
+
+        return response($file['body'], 200, ['Content-Type' => $file['content_type']]);
+    }
+
+    /**
+     * الحوالة لازم يكون معاها إيصال: التحويل لـ bank_transfer من طريقة تانية لازم يرفع
+     * إيصال، والإيصال ما ينفعش يتبعت مع طريقة غير الحوالة.
+     */
+    private function ensureReceiptMatchesMethod(?string $current, ?string $new, bool $hasReceipt): void
+    {
+        $final = $new ?? $current;
+
+        if ($final === 'bank_transfer' && $current !== 'bank_transfer' && ! $hasReceipt) {
+            throw ValidationException::withMessages([
+                'transfer_receipt' => ['ارفع صورة إيصال الحوالة'],
+            ]);
+        }
+
+        if ($hasReceipt && $final !== 'bank_transfer') {
+            throw ValidationException::withMessages([
+                'transfer_receipt' => ['صورة الإيصال مطلوبة فقط مع الدفع بالحوالة'],
+            ]);
+        }
+    }
+
     private function queuedOrderDetails(PendingSync $sync): array
     {
         $payload = $sync->payload;
@@ -312,6 +423,9 @@ class OrderController extends Controller
             'custom_delivery_address' => $payload['delivery_address'] ?? null,
             'custom_notes' => $payload['notes'] ?? null,
             'custom_payment_method' => $payload['payment_method'] ?? null,
+            'transfer_receipt_url' => ! empty($payload['transfer_receipt_path'])
+                ? url("/api/v1/orders/{$sync->id}/transfer-receipt")
+                : null,
             'grand_total' => round(array_sum(array_column($items, 'amount')), 2),
             'items' => $this->withProductImages($items),
         ];
@@ -380,7 +494,7 @@ class OrderController extends Controller
      * فحص مبدئي هنا (ملكية + الحالة) عشان رسالة واضحة بسرعة — بس ERPNext هو اللي
      * لازم يفرض نفس الشرط فعليًا، لأن الحالة ممكن تتغير بين الفحص ده والنداء.
      */
-    private function ensureEditableErpOrder(Request $request, string $order, ERPNextService $erp): void
+    private function ensureEditableErpOrder(Request $request, string $order, ERPNextService $erp): array
     {
         try {
             $doc = $erp->get('Sales Order', $order);
@@ -390,11 +504,13 @@ class OrderController extends Controller
 
         abort_unless(($doc['customer'] ?? null) === $request->user()->erp_customer_id, 403);
 
-        if (($doc['custom_workflow_state'] ?? null) !== self::EDITABLE_STATE) {
+        if (! in_array($doc['custom_workflow_state'] ?? null, self::EDITABLE_STATES, true)) {
             throw ValidationException::withMessages([
                 'order' => ['لا يمكن تعديل أو إلغاء الطلب بعد بدء تجهيزه'],
             ]);
         }
+
+        return $doc;
     }
 
     /**

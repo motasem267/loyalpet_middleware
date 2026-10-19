@@ -22,6 +22,38 @@ class ERPNextService
         ])->baseUrl($this->baseUrl);
     }
 
+    /**
+     * رفع ملف (مثلًا إيصال الحوالة) كملف خاص (is_private) — بيرجع file_url اللي
+     * بيتبعت لـ create_sales_order. client() فيه Content-Type: json فبنبني طلب multipart منفصل.
+     */
+    public function uploadFile(string $path, string $filename): string
+    {
+        return Http::withHeaders([
+            'Authorization' => 'token '.config('erpnext.api_key').':'.config('erpnext.api_secret'),
+        ])
+            ->baseUrl($this->baseUrl)
+            ->attach('file', file_get_contents($path), $filename)
+            ->post('/api/method/upload_file', ['is_private' => 1])
+            ->throw()
+            ->json('message.file_url');
+    }
+
+    /**
+     * تحميل ملف خاص من ERPNext (/private/files/...) — التطبيق ما يقدرش يفتحه مباشرة
+     * لأنه محتاج توكن ERPNext، فلارافيل بيجيبه ويعدّيه.
+     *
+     * @return array{body: string, content_type: string}
+     */
+    public function downloadFile(string $fileUrl): array
+    {
+        $response = $this->client()->get($fileUrl)->throw();
+
+        return [
+            'body' => $response->body(),
+            'content_type' => $response->header('Content-Type') ?: 'application/octet-stream',
+        ];
+    }
+
     public function getList(string $doctype, array $filters = [], array $fields = [], int $limit = 20, int $offset = 0): array
     {
         return $this->client()->get('/api/resource/'.$doctype, [

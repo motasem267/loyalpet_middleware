@@ -1,7 +1,7 @@
 <?php
 
 return [
-    'base_url' => env('EZONEPAY_BASE_URL', 'https://api.ezonepay.com'),
+    'base_url' => env('EZONEPAY_BASE_URL', 'https://api.ezonepay.ly'),
 
     // X-API-Key — لازم يكون عنده scope: payment.link.create (وpayment.link.view لو حبينا نستعلم لاحقًا)
     'api_key' => env('EZONEPAY_API_KEY'),

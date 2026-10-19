@@ -8,6 +8,7 @@ use App\Services\ERPNextService;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
 use Illuminate\Http\Client\RequestException;
+use Illuminate\Support\Facades\Storage;
 
 class SyncToERPNext implements ShouldQueue
 {
@@ -74,16 +75,27 @@ class SyncToERPNext implements ShouldQueue
             throw new \RuntimeException('العميل لسه ما اتزامنش مع ERPNext');
         }
 
+        // إيصال الحوالة: بيترفع مرة واحدة بس — الرابط بيتحفظ في الـ payload عشان لو
+        // الإنشاء فشل واتعاد، ما نرفعش نفس الصورة تاني
+        $isTransfer = $payload['payment_method'] === 'bank_transfer';
+
+        if ($isTransfer && ! empty($payload['transfer_receipt_path']) && empty($payload['transfer_receipt_url'])) {
+            $path = $payload['transfer_receipt_path'];
+            $payload['transfer_receipt_url'] = $erp->uploadFile(Storage::path($path), basename($path));
+            $this->sync->update(['payload' => $payload]);
+        }
+
         try {
             $result = $this->unwrap($erp->callMethod('loyalpet.api.orders.create_sales_order', [
-            'customer_id' => $user->erp_customer_id,
-            'items' => $payload['items'],
-            'payment_method' => $payload['payment_method'],
-            'recipient_name' => $payload['recipient_name'],
-            'recipient_phone' => $payload['recipient_phone'],
-            'delivery_address' => $payload['delivery_address'],
-            'delivery_date' => $payload['delivery_date'],
-            'notes' => $payload['notes'] ?? null,
+                'customer_id' => $user->erp_customer_id,
+                'items' => $payload['items'],
+                'payment_method' => $payload['payment_method'],
+                'recipient_name' => $payload['recipient_name'],
+                'recipient_phone' => $payload['recipient_phone'],
+                'delivery_address' => $payload['delivery_address'],
+                'delivery_date' => $payload['delivery_date'],
+                'notes' => $payload['notes'] ?? null,
+                ...($isTransfer ? ['transfer_receipt' => $payload['transfer_receipt_url'] ?? null] : []),
             ]));
         } catch (RequestException $e) {
             if ($e->response->status() >= 500) {
@@ -107,6 +119,11 @@ class SyncToERPNext implements ShouldQueue
             'erp_name' => $result['name'],
             'synced_at' => now(),
         ]);
+
+        // الإيصال بقى في ERPNext — النسخة المحلية ما عادش ليها لازمة
+        if (! empty($payload['transfer_receipt_path'])) {
+            Storage::delete($payload['transfer_receipt_path']);
+        }
 
         OrderStatusHistory::create([
             'erp_order' => $result['name'],

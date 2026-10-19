@@ -6,6 +6,7 @@ use App\Http\Controllers\Auth\ProfileController;
 use App\Http\Controllers\Catalog\BundleController;
 use App\Http\Controllers\Catalog\CategoryController;
 use App\Http\Controllers\Catalog\DeliveryZoneController;
+use App\Http\Controllers\Catalog\PaymentMethodController;
 use App\Http\Controllers\Catalog\ProductController;
 use App\Http\Controllers\Shop\CartController;
 use App\Http\Controllers\Shop\FavoriteController;
@@ -35,6 +36,7 @@ Route::prefix('v1')->group(function () {
     Route::get('/bundles', [BundleController::class, 'index']);
     Route::get('/bundles/{bundle}', [BundleController::class, 'show']);
     Route::get('/delivery-zones', [DeliveryZoneController::class, 'index']);
+    Route::get('/payment-methods', [PaymentMethodController::class, 'index']);
 
     // بدون auth:sanctum — ERPNext مش مستخدم موبايل، الحماية عن طريق توقيع HMAC بس
     Route::post('/webhooks/erp', [WebhookController::class, 'handleErp']);
@@ -69,6 +71,7 @@ Route::prefix('v1')->group(function () {
         Route::get('/orders/{order}', [OrderController::class, 'show']);
         Route::patch('/orders/{order}', [OrderController::class, 'update']);
         Route::delete('/orders/{order}', [OrderController::class, 'destroy']);
+        Route::get('/orders/{order}/transfer-receipt', [OrderController::class, 'transferReceipt']);
 
         Route::post('/wallet/topup', [PaymentController::class, 'topUp']);
         Route::get('/wallet/balance', [WalletController::class, 'balance']);
