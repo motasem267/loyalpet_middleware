@@ -102,7 +102,7 @@ class AuthController extends Controller
 
         if ($user->erp_sync_status !== 'synced' || ! $user->erp_customer_id) {
             throw ValidationException::withMessages([
-                'phone' => ['حسابك لسه في طور المزامنة، حاول مرة ثانية بعد شوي'],
+                'phone' => ['حسابك قيد التجهيز , يرجى الانتظار دقيقة واحدة'],
             ]);
         }
 
