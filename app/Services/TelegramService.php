@@ -13,6 +13,9 @@ class TelegramService
     }
 
     /**
+     * disable_notification = false صراحةً — الرسالة بتوصل بإشعار وصوت على الموبايل
+     * (ده الافتراضي في تليجرام أصلًا، بس محطوط عشان ما يتغيرش بالغلط).
+     *
      * HTML بدل Markdown — أسماء الأصناف والعناوين فيها رموز (* _ -) بتكسر Markdown،
      * وفي HTML بنهرّب < > & بس (escape()).
      */
@@ -24,6 +27,7 @@ class TelegramService
                 'text' => $text,
                 'parse_mode' => 'HTML',
                 'disable_web_page_preview' => true,
+                'disable_notification' => false,
             ])->throw();
         }
     }
@@ -40,6 +44,7 @@ class TelegramService
                     'chat_id' => $chatId,
                     'caption' => mb_substr($caption, 0, 1024),
                     'parse_mode' => 'HTML',
+                    'disable_notification' => 'false',
                 ])->throw();
         }
     }
