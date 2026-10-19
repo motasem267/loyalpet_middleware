@@ -145,8 +145,29 @@ class OrderController extends Controller
         ]);
     }
 
+    /**
+     * {order} = رقم الطلب في ERPNext، أو reference (رقم) لطلب لسه في الطابور — الأخير
+     * بيرجع بنفس أسماء حقول Sales Order عشان شاشة التفاصيل/التعديل في التطبيق تتعامل
+     * مع الحالتين بنفس الشكل. لو الطلب اتبعت خلاص (done) بنرجّع نسخة ERPNext.
+     */
     public function show(Request $request, string $order, ERPNextService $erp): JsonResponse
     {
+        if (ctype_digit($order)) {
+            $sync = PendingSync::where('id', (int) $order)
+                ->where('user_id', $request->user()->id)
+                ->where('doctype', 'Sales Order')
+                ->where('status', '!=', 'cancelled')
+                ->first();
+
+            abort_if(! $sync, 404, 'الطلب غير موجود');
+
+            if ($sync->status !== 'done' || ! $sync->erp_name) {
+                return response()->json(['data' => $this->queuedOrderDetails($sync)]);
+            }
+
+            $order = $sync->erp_name;
+        }
+
         try {
             $doc = $erp->get('Sales Order', $order);
         } catch (\Illuminate\Http\Client\RequestException $e) {
@@ -238,6 +259,38 @@ class OrderController extends Controller
         ]);
 
         return response()->json(['message' => 'تم إلغاء الطلب']);
+    }
+
+    private function queuedOrderDetails(PendingSync $sync): array
+    {
+        $payload = $sync->payload;
+
+        $names = Product::whereIn('item_code', array_column($payload['items'] ?? [], 'item_code'))
+            ->pluck('item_name', 'item_code');
+
+        $items = array_map(fn (array $item) => [
+            'item_code' => $item['item_code'],
+            'item_name' => $names[$item['item_code']] ?? $item['item_code'],
+            'qty' => $item['qty'],
+            'rate' => $item['rate'],
+            'amount' => round($item['qty'] * $item['rate'], 2),
+        ], $payload['items'] ?? []);
+
+        return [
+            'name' => null,
+            'reference' => $sync->id,
+            'status' => $sync->status === 'failed' ? 'فشل الإرسال' : 'جاري الإرسال',
+            'custom_workflow_state' => null,
+            'transaction_date' => $sync->created_at,
+            'delivery_date' => $payload['delivery_date'] ?? null,
+            'custom_recipient_name' => $payload['recipient_name'] ?? null,
+            'custom_recipient_phone' => $payload['recipient_phone'] ?? null,
+            'custom_delivery_address' => $payload['delivery_address'] ?? null,
+            'custom_notes' => $payload['notes'] ?? null,
+            'custom_payment_method' => $payload['payment_method'] ?? null,
+            'grand_total' => round(array_sum(array_column($items, 'amount')), 2),
+            'items' => $this->withProductImages($items),
+        ];
     }
 
     /**
