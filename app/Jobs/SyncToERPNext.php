@@ -20,11 +20,17 @@ class SyncToERPNext implements ShouldQueue
 
     public function handle(ERPNextService $erp): void
     {
-        if ($this->sync->status === 'done') {
+        // حجز ذرّي (update مشروط) بدل فحص ثم تحديث — عشان لو الزبون لغى/عدّل الطلب في
+        // نفس اللحظة (OrderController)، يا الإلغاء يكسب يا الإرسال، مش الاتنين.
+        $claimed = PendingSync::whereKey($this->sync->id)
+            ->whereNotIn('status', ['done', 'cancelled'])
+            ->update(['status' => 'processing']);
+
+        if (! $claimed) {
             return;
         }
 
-        $this->sync->update(['status' => 'processing']);
+        $this->sync->refresh();
 
         try {
             match ($this->sync->doctype) {

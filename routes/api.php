@@ -67,6 +67,8 @@ Route::prefix('v1')->group(function () {
         Route::get('/orders', [OrderController::class, 'index']);
         Route::post('/orders', [OrderController::class, 'store']);
         Route::get('/orders/{order}', [OrderController::class, 'show']);
+        Route::patch('/orders/{order}', [OrderController::class, 'update']);
+        Route::delete('/orders/{order}', [OrderController::class, 'destroy']);
 
         Route::post('/wallet/topup', [PaymentController::class, 'topUp']);
         Route::get('/wallet/balance', [WalletController::class, 'balance']);

@@ -10,11 +10,17 @@ use App\Models\Product;
 use App\Services\ERPNextService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Validation\ValidationException;
 
 class OrderController extends Controller
 {
+    /**
+     * الحالة الوحيدة (custom_workflow_state) اللي الزبون يقدر فيها يعدّل أو يلغي الطلب.
+     */
+    private const EDITABLE_STATE = 'قيد المراجعة';
+
     /**
      * إنشاء طلب من السلة النشطة الحالية — الكتابة دايمًا عبر الطابور (pending_syncs)،
      * مش نداء مباشر لـ ERPNext، حتى مع وجود إنترنت.
@@ -152,6 +158,217 @@ class OrderController extends Controller
         $doc['items'] = $this->withProductImages($doc['items'] ?? []);
 
         return response()->json(['data' => $doc]);
+    }
+
+    /**
+     * تعديل طلب — أي حقل من حقول الإنشاء (كلها اختيارية هنا، بس لازم واحد على الأقل).
+     * items لو اتبعتت بتستبدل أصناف الطلب كلها، والسعر دايمًا من الكاش المحلي (مش من التطبيق).
+     * {order} = رقم الطلب في ERPNext، أو reference (رقم) لطلب لسه في الطابور.
+     */
+    public function update(Request $request, string $order, ERPNextService $erp): JsonResponse
+    {
+        $validated = $request->validate([
+            'payment_method' => ['sometimes', 'string', 'in:wallet,cash_on_delivery'],
+            'recipient_name' => ['sometimes', 'string', 'max:150'],
+            'recipient_phone' => ['sometimes', 'string', 'max:20'],
+            'delivery_address' => ['sometimes', 'string', 'max:500'],
+            'delivery_date' => ['sometimes', 'date', 'after_or_equal:today'],
+            'notes' => ['sometimes', 'nullable', 'string', 'max:500'],
+            'items' => ['sometimes', 'array', 'min:1'],
+            'items.*.item_code' => ['required', 'string', 'distinct'],
+            'items.*.qty' => ['required', 'numeric', 'min:0.001'],
+        ]);
+
+        if (! $validated) {
+            throw ValidationException::withMessages([
+                'order' => ['لا توجد تعديلات — أرسل حقلًا واحدًا على الأقل'],
+            ]);
+        }
+
+        $changes = collect($validated)->except('items')->all();
+
+        if (isset($validated['items'])) {
+            $changes['items'] = $this->buildOrderItems($validated['items']);
+        }
+
+        if (ctype_digit($order)) {
+            $sync = $this->withQueuedOrder($request, (int) $order, function (PendingSync $sync) use ($changes) {
+                $sync->update(['payload' => array_merge($sync->payload, $changes)]);
+            });
+
+            return response()->json([
+                'message' => 'تم تعديل الطلب',
+                'reference' => $sync->id,
+            ]);
+        }
+
+        $this->ensureEditableErpOrder($request, $order, $erp);
+
+        $result = $this->callOrderMethod($erp, 'loyalpet.api.orders.update_sales_order', [
+            'order_name' => $order,
+            'customer_id' => $request->user()->erp_customer_id,
+            ...$changes,
+        ]);
+
+        return response()->json([
+            'message' => 'تم تعديل الطلب',
+            'data' => $result,
+        ]);
+    }
+
+    /**
+     * "حذف" الطلب = إلغاؤه — طلب Sales Order معتمد في ERPNext ما بيتمسحش، بيتلغى (Cancel)
+     * ويفضل مسجل للحسابات والمخزون. الطلب اللي لسه في الطابور بيتلغى محليًا وما يتبعتش.
+     */
+    public function destroy(Request $request, string $order, ERPNextService $erp): JsonResponse
+    {
+        if (ctype_digit($order)) {
+            $this->withQueuedOrder($request, (int) $order, function (PendingSync $sync) {
+                $sync->update(['status' => 'cancelled']);
+            });
+
+            return response()->json(['message' => 'تم إلغاء الطلب']);
+        }
+
+        $this->ensureEditableErpOrder($request, $order, $erp);
+
+        $this->callOrderMethod($erp, 'loyalpet.api.orders.cancel_sales_order', [
+            'order_name' => $order,
+            'customer_id' => $request->user()->erp_customer_id,
+        ]);
+
+        return response()->json(['message' => 'تم إلغاء الطلب']);
+    }
+
+    /**
+     * نفس شروط الإضافة للسلة (CartController::store) — المنتج نشط وظاهر في التطبيق،
+     * ومش Template عنده Variants (لازم يتحدد الحجم/النكهة).
+     */
+    private function buildOrderItems(array $items): array
+    {
+        $products = Product::whereIn('item_code', array_column($items, 'item_code'))
+            ->where('is_active', true)
+            ->where('show_in_app', true)
+            ->withExists('variants')
+            ->get()
+            ->keyBy('item_code');
+
+        return array_map(function (array $item) use ($products) {
+            $product = $products->get($item['item_code']);
+
+            if (! $product || $product->variants_exists) {
+                throw ValidationException::withMessages([
+                    'items' => ["المنتج {$item['item_code']} غير موجود أو غير متاح حاليًا"],
+                ]);
+            }
+
+            return [
+                'item_code' => $product->item_code,
+                'qty' => (float) $item['qty'],
+                'rate' => (float) $product->price,
+            ];
+        }, $items);
+    }
+
+    /**
+     * قفل صف الطابور (lockForUpdate) بيمنع SyncToERPNext إنه يحجز الطلب في نفس اللحظة —
+     * يا التعديل/الإلغاء يخلص الأول، يا الطلب يكون اتبعت فعلًا ونرفض.
+     */
+    private function withQueuedOrder(Request $request, int $reference, callable $callback): PendingSync
+    {
+        return DB::transaction(function () use ($request, $reference, $callback) {
+            $sync = PendingSync::where('id', $reference)
+                ->where('user_id', $request->user()->id)
+                ->where('doctype', 'Sales Order')
+                ->lockForUpdate()
+                ->first();
+
+            abort_if(! $sync, 404, 'الطلب غير موجود');
+
+            if (! in_array($sync->status, ['pending', 'failed'], true)) {
+                throw ValidationException::withMessages([
+                    'order' => [$sync->status === 'cancelled'
+                        ? 'الطلب ملغي بالفعل'
+                        : 'الطلب وصل للنظام بالفعل — حدّث قائمة الطلبات وحاول مرة أخرى'],
+                ]);
+            }
+
+            $callback($sync);
+
+            return $sync;
+        });
+    }
+
+    /**
+     * فحص مبدئي هنا (ملكية + الحالة) عشان رسالة واضحة بسرعة — بس ERPNext هو اللي
+     * لازم يفرض نفس الشرط فعليًا، لأن الحالة ممكن تتغير بين الفحص ده والنداء.
+     */
+    private function ensureEditableErpOrder(Request $request, string $order, ERPNextService $erp): void
+    {
+        try {
+            $doc = $erp->get('Sales Order', $order);
+        } catch (\Illuminate\Http\Client\RequestException $e) {
+            abort(404, 'الطلب غير موجود');
+        }
+
+        abort_unless(($doc['customer'] ?? null) === $request->user()->erp_customer_id, 403);
+
+        if (($doc['custom_workflow_state'] ?? null) !== self::EDITABLE_STATE) {
+            throw ValidationException::withMessages([
+                'order' => ['لا يمكن تعديل أو إلغاء الطلب بعد بدء تجهيزه'],
+            ]);
+        }
+    }
+
+    /**
+     * أخطاء التحقق من ERPNext (frappe.throw — مثلًا "الرصيد غير كافٍ") بنرجّعها 422
+     * برسالتها عشان التطبيق يعرضها، بدل 500 عام.
+     */
+    private function callOrderMethod(ERPNextService $erp, string $method, array $params): array
+    {
+        try {
+            $result = $erp->callMethod($method, $params);
+        } catch (\Illuminate\Http\Client\RequestException $e) {
+            $status = $e->response->status();
+
+            // frappe.throw بيرجع 417 (أو 4xx تانية) — دي رسائل للزبون؛ 5xx بس هو عطل فعلي
+            if ($status >= 500) {
+                Log::error("[Orders] {$method} فشل: ".$e->getMessage());
+
+                throw ValidationException::withMessages([
+                    'order' => ['تعذر تنفيذ العملية حاليًا، حاول مرة أخرى'],
+                ]);
+            }
+
+            throw ValidationException::withMessages([
+                'order' => [$this->frappeErrorMessage($e->response->json() ?? []) ?? 'تعذر تنفيذ العملية'],
+            ]);
+        }
+
+        $data = $result['message'] ?? $result;
+
+        return is_array($data) ? $data : [];
+    }
+
+    /**
+     * Frappe بيحط رسالة frappe.throw في _server_messages (JSON string لـ list من JSON
+     * strings، كل واحدة فيها message) — أو في exception كـ "frappe.exceptions.X: الرسالة".
+     */
+    private function frappeErrorMessage(array $body): ?string
+    {
+        foreach (json_decode($body['_server_messages'] ?? '[]', true) ?: [] as $raw) {
+            $message = json_decode($raw, true)['message'] ?? null;
+
+            if ($message) {
+                return strip_tags($message);
+            }
+        }
+
+        if (isset($body['exception'])) {
+            return trim(preg_replace('/^[\w.]+:\s*/', '', $body['exception']));
+        }
+
+        return null;
     }
 
     /**
