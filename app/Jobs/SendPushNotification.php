@@ -34,17 +34,23 @@ class SendPushNotification implements ShouldQueue
         public ?string $image = null,
     ) {}
 
-    public function handle(FirebaseService $firebase): void
+    /**
+     * @return array{sent: int, failed: int} للـ topic (الكل) FCM ما بيرجعش عدد لكل جهاز —
+     *                                       sent = عدد الأجهزة النشطة المشتركة
+     */
+    public function handle(FirebaseService $firebase): array
     {
         $notification = ['title' => $this->title, 'body' => $this->body, 'image' => $this->image];
         $data = [...$this->data, 'type' => $this->type];
         $status = 'disabled';
         $devicesByUser = collect();
+        $counts = ['sent' => 0, 'failed' => 0];
 
         if ($firebase->enabled()) {
             if ($this->userIds === null) {
                 $firebase->sendToTopic(config('firebase.all_users_topic'), $notification, $data);
                 $status = 'sent';
+                $counts['sent'] = DeviceToken::where('is_active', true)->count();
             } else {
                 $devices = DeviceToken::whereIn('user_id', $this->userIds)->where('is_active', true)->get(['user_id', 'token']);
 
@@ -58,12 +64,15 @@ class SendPushNotification implements ShouldQueue
                 $devicesByUser = $devices->whereNotIn('token', $result['invalid'])->groupBy('user_id');
 
                 $status = 'sent';
+                $counts = ['sent' => $result['sent'], 'failed' => $result['failed']];
 
                 Log::info("[Push] {$this->type}: sent={$result['sent']} failed={$result['failed']} invalid=".count($result['invalid']));
             }
         }
 
         $this->saveToInbox($status, $devicesByUser);
+
+        return $counts;
     }
 
     private function saveToInbox(string $status, $devicesByUser): void

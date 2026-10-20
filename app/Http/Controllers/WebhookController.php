@@ -12,6 +12,7 @@ use App\Models\OrderStatusHistory;
 use App\Models\Product;
 use App\Models\User;
 use App\Services\ERPNextService;
+use App\Services\FirebaseService;
 use App\Services\OrderTelegramNotifier;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -33,6 +34,11 @@ class WebhookController extends Controller
         // فـ $request->all() ما بيتعرفش على الـ body كـ JSON — بنفكّه من الـ raw body مباشرة.
         $data = json_decode($request->getContent(), true) ?? [];
         $doctype = $data['doctype'] ?? null;
+
+        // زر "إرسال" في شاشة App Notification — محتاج رد فيه عدد الوصول/الفشل، مش {"status":"ok"}
+        if ($doctype === 'App Notification') {
+            return $this->processAppNotification($data);
+        }
 
         // إعادة التسمية (Rename) في ERPNext بتغيّر الـ name نفسه، والويبهوك العادي بيوصل بالاسم
         // الجديد بس — فكان بيتخلق سجل جديد ويفضل القديم والمنتجات مربوطة بيه. الحدث ده
@@ -236,29 +242,49 @@ class WebhookController extends Controller
     }
 
     /**
-     * زر "إرسال" في شاشة "إشعار التطبيق" في ERPNext بيستدعي هذا الـ endpoint (موقّع بنفس
-     * سر الويبهوك). target=all → topic واحد لكل الأجهزة؛ target=customers → أرقام Customer
-     * في ERPNext بنحوّلها لمستخدمين. الإرسال في الطابور — الرد فيه عدد المستهدفين بس.
+     * زر "إرسال" في شاشة "App Notification" في ERPNext — بيوصل هنا أو على /webhooks/erp
+     * (doctype = "App Notification")، والاتنين موقّعين بنفس سر الويبهوك.
      */
     public function handlePushNotification(Request $request): JsonResponse
     {
         $this->verifySignature($request);
 
-        $data = json_decode($request->getContent(), true) ?? [];
+        return $this->processAppNotification(json_decode($request->getContent(), true) ?? []);
+    }
+
+    /**
+     * شكل ERPNext: send_to (all|specific) + customer_ids + action {type, ...}. الشكل القديم
+     * (target/customers/data) لسه مقبول. الإرسال فوري (مش طابور) لأن ERPNext بيسجّل
+     * success_count/failed_count من الرد على المستند ويقفله.
+     */
+    private function processAppNotification(array $data): JsonResponse
+    {
+        $data['send_to'] ??= ($data['target'] ?? null) === 'customers' ? 'specific' : ($data['target'] ?? null);
+        $data['customer_ids'] ??= $data['customers'] ?? [];
 
         $validator = validator($data, [
             'title' => ['required', 'string', 'max:150'],
             'body' => ['required', 'string', 'max:1000'],
             'image' => ['nullable', 'string', 'max:500'],
-            'target' => ['required', 'in:all,customers'],
-            'customers' => ['required_if:target,customers', 'array'],
-            'customers.*' => ['string'],
+            'send_to' => ['required', 'in:all,specific'],
+            'customer_ids' => ['required_if:send_to,specific', 'array'],
+            'customer_ids.*' => ['string'],
+            'action' => ['nullable', 'array'],
             'data' => ['nullable', 'array'],
-            'reference' => ['nullable', 'string', 'max:150'],
         ]);
 
         if ($validator->fails()) {
-            return response()->json(['status' => 'invalid', 'errors' => $validator->errors()], 422);
+            return response()->json([
+                'success_count' => 0,
+                'failed_count' => 0,
+                'error' => $validator->errors()->first(),
+            ], 422);
+        }
+
+        $firebase = app(FirebaseService::class);
+
+        if (! $firebase->enabled()) {
+            return response()->json(['success_count' => 0, 'failed_count' => 0, 'error' => 'Firebase غير مضبوط على السيرفر'], 503);
         }
 
         // صورة من ERPNext بتيجي مسار نسبي (/files/x.png) — FCM محتاج رابط كامل عام
@@ -267,34 +293,69 @@ class WebhookController extends Controller
             $image = rtrim((string) config('erpnext.url'), '/').$image;
         }
 
-        $extra = array_filter([...($data['data'] ?? []), 'reference' => $data['reference'] ?? null]);
         $userIds = null;
         $unknown = [];
 
-        if ($data['target'] === 'customers') {
-            $users = User::whereIn('erp_customer_id', $data['customers'])->pluck('id', 'erp_customer_id');
+        if ($data['send_to'] === 'specific') {
+            $users = User::whereIn('erp_customer_id', $data['customer_ids'])->pluck('id', 'erp_customer_id');
             $userIds = $users->values()->all();
-            $unknown = array_values(array_diff($data['customers'], $users->keys()->all()));
+            $unknown = array_values(array_diff($data['customer_ids'], $users->keys()->all()));
         }
 
-        SendPushNotification::dispatch(
-            $data['target'] === 'all' ? 'broadcast' : 'custom',
-            $data['title'],
-            $data['body'],
-            $userIds,
-            $extra,
-            $image,
-        );
+        try {
+            $counts = (new SendPushNotification(
+                $data['send_to'] === 'all' ? 'broadcast' : 'custom',
+                $data['title'],
+                $data['body'],
+                $userIds,
+                [...$this->notificationAction($data), ...($data['data'] ?? []), 'reference' => $data['name'] ?? $data['reference'] ?? null],
+                $image,
+            ))->handle($firebase);
+        } catch (\Throwable $e) {
+            Log::error('[Push] فشل إرسال App Notification: '.$e->getMessage());
+
+            return response()->json(['success_count' => 0, 'failed_count' => 0, 'error' => 'تعذر الإرسال لـ Firebase'], 502);
+        }
 
         return response()->json([
-            'status' => 'queued',
-            'users' => $userIds === null ? User::where('is_active', true)->count() : count($userIds),
-            'devices' => DeviceToken::where('is_active', true)
-                ->when($userIds !== null, fn ($q) => $q->whereIn('user_id', $userIds))
-                ->count(),
-            // زبائن في ERPNext ما عندهمش حساب في التطبيق — ما هيوصلهمش حاجة
+            'success_count' => $counts['sent'],
+            'failed_count' => $counts['failed'],
+            // زبائن في ERPNext ما عندهمش حساب في التطبيق — ما وصلهمش حاجة
             'unknown_customers' => $unknown,
         ]);
+    }
+
+    /**
+     * action من ERPNext ← data للتطبيق (strings): action = none|item|item_group|url + القيمة.
+     * للمنتج بنضيف product_id كمان، لأن التطبيق بيفتح المنتج بـ GET /products/{id}.
+     */
+    private function notificationAction(array $data): array
+    {
+        $action = $data['action'] ?? [];
+        $type = $action['type'] ?? 'none';
+
+        if ($type === 'none') {
+            return [];
+        }
+
+        $value = $action['value'] ?? $action[$type] ?? $action['item_code'] ?? $action['url'] ?? null;
+
+        $result = [
+            ...array_filter($action, fn ($v, $k) => $k !== 'type' && is_scalar($v), ARRAY_FILTER_USE_BOTH),
+            'action' => $type,
+        ];
+
+        match ($type) {
+            'item' => $result += [
+                'item_code' => $value,
+                'product_id' => Product::where('item_code', $value)->orWhere('erp_name', $value)->value('id'),
+            ],
+            'item_group' => $result += ['item_group' => $value],
+            'url' => $result += ['url' => $value],
+            default => null,
+        };
+
+        return array_filter($result, fn ($v) => $v !== null && $v !== '');
     }
 
     private function verifySignature(Request $request): void
