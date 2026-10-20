@@ -41,7 +41,7 @@ class SendPushNotification implements ShouldQueue
     public function handle(FirebaseService $firebase): array
     {
         $notification = ['title' => $this->title, 'body' => $this->body, 'image' => $this->image];
-        $data = [...$this->data, 'type' => $this->type];
+        $data = $this->appData();
         $status = 'disabled';
         $devicesByUser = collect();
         $counts = ['sent' => 0, 'failed' => 0];
@@ -75,6 +75,25 @@ class SendPushNotification implements ShouldQueue
         return $counts;
     }
 
+    /**
+     * "type" في data = الشاشة اللي التطبيق يفتحها لما الزبون يدوس (عقد التطبيق):
+     * order → طلباتي، product (+ product_id) → تفاصيل المنتج، أي حاجة تانية → شاشة
+     * الإشعارات. نوع الإشعار نفسه (order_status, broadcast...) بيتبعت في "category".
+     * نفس البيانات بتتحفظ في قائمة الإشعارات، عشان الضغط من القائمة يفتح نفس الوجهة.
+     */
+    private function appData(): array
+    {
+        $type = match (true) {
+            ! empty($this->data['product_id']) => 'product',
+            $this->type === 'order_status' => 'order',
+            ($this->data['action'] ?? null) === 'item_group' => 'item_group',
+            ($this->data['action'] ?? null) === 'url' => 'url',
+            default => 'general',
+        };
+
+        return [...$this->data, 'type' => $type, 'category' => $this->type];
+    }
+
     private function saveToInbox(string $status, $devicesByUser): void
     {
         $users = User::query()
@@ -83,7 +102,7 @@ class SendPushNotification implements ShouldQueue
             ->select('id');
 
         $now = now();
-        $data = json_encode($this->data + ($this->image ? ['image' => $this->image] : []), JSON_UNESCAPED_UNICODE);
+        $data = json_encode($this->appData() + ($this->image ? ['image' => $this->image] : []), JSON_UNESCAPED_UNICODE);
 
         $users->chunkById(1000, function ($chunk) use ($status, $devicesByUser, $now, $data) {
             DB::table('notifications')->insert($chunk->map(fn ($user) => [
