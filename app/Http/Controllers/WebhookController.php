@@ -348,7 +348,7 @@ class WebhookController extends Controller
         match ($type) {
             'item' => $result += [
                 'item_code' => $value,
-                'product_id' => Product::where('item_code', $value)->orWhere('erp_name', $value)->value('id'),
+                'product_id' => $this->appProductId($value),
             ],
             'item_group' => $result += ['item_group' => $value],
             'url' => $result += ['url' => $value],
@@ -356,6 +356,26 @@ class WebhookController extends Controller
         };
 
         return array_filter($result, fn ($v) => $v !== null && $v !== '');
+    }
+
+    /**
+     * id اللي التطبيق يفتحه بـ GET /products/{id}: لو الموظف اختار وزن (Variant)، بنفتح
+     * المنتج الأساسي (Template) اللي فيه الأوزان — وده اللي بيظهر في التطبيق. لو المنتج
+     * مخفي أو موقوف بنرجّع null، فالإشعار يفتح شاشة الإشعارات بدل "المنتج غير متاح".
+     */
+    private function appProductId(?string $itemCode): ?int
+    {
+        if (! $itemCode) {
+            return null;
+        }
+
+        $product = Product::where('item_code', $itemCode)->orWhere('erp_name', $itemCode)->first();
+
+        if ($product?->variant_of) {
+            $product = Product::where('erp_name', $product->variant_of)->first();
+        }
+
+        return $product && $product->is_active && $product->show_in_app ? $product->id : null;
     }
 
     private function verifySignature(Request $request): void
