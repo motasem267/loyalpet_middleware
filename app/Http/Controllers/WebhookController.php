@@ -2,11 +2,12 @@
 
 namespace App\Http\Controllers;
 
+use App\Jobs\SendPushNotification;
 use App\Models\AuditLog;
 use App\Models\Bundle;
 use App\Models\DeliveryZone;
+use App\Models\DeviceToken;
 use App\Models\ItemGroup;
-use App\Models\Notification;
 use App\Models\OrderStatusHistory;
 use App\Models\Product;
 use App\Models\User;
@@ -170,6 +171,16 @@ class WebhookController extends Controller
         // نفس الحالة ممكن توصل مرتين (مثلًا الحالة الأولى اتسجلت وقت الإنشاء في SyncToERPNext)
         if ($oldStatus !== $newStatus) {
             app(OrderTelegramNotifier::class)->statusChanged($data['name'], $oldStatus, $newStatus, $userId ? User::find($userId) : null);
+
+            if ($userId) {
+                SendPushNotification::dispatch(
+                    'order_status',
+                    'تحديث على طلبك',
+                    "طلبك {$data['name']} حالته الآن: {$newStatus}",
+                    [$userId],
+                    ['order' => $data['name']],
+                );
+            }
         }
     }
 
@@ -197,8 +208,7 @@ class WebhookController extends Controller
      * ⚠️ مهمة send_appointment_reminders في ERPNext (يوميًا) بتستدعي هذا الـ endpoint
      * لأي موعد بكرة. شكل الـ payload هنا **تخمين معقول لسه محتاج تأكيد فعلي** —
      * أول استدعاء حقيقي يوصل لازم نتحقق من أسماء الحقول ونعدّل هنا لو اختلفت.
-     * حاليًا بننشئ إشعار داخل التطبيق بس (Notification record) — إرسال Push فعلي
-     * عبر FCM لسه مش متبني (محتاج Firebase Admin SDK + بيانات اعتماد منفصلة).
+     * بيتبعت Push للزبون ويتحفظ في قائمة إشعاراته (SendPushNotification).
      */
     public function handleAppointmentReminder(Request $request): JsonResponse
     {
@@ -214,15 +224,77 @@ class WebhookController extends Controller
             return response()->json(['status' => 'ignored']);
         }
 
-        Notification::create([
-            'user_id' => $userId,
-            'type' => 'vet_appointment_reminder',
-            'title' => 'تذكير بموعدك البيطري غدًا',
-            'body' => trim(($data['service_type'] ?? 'موعد').' — الساعة '.($data['appointment_time'] ?? '')),
-            'data' => $data,
-        ]);
+        SendPushNotification::dispatch(
+            'vet_appointment_reminder',
+            'تذكير بموعدك البيطري غدًا',
+            trim(($data['service_type'] ?? 'موعد').' — الساعة '.($data['appointment_time'] ?? '')),
+            [$userId],
+            array_filter(['appointment' => $data['name'] ?? null]),
+        );
 
         return response()->json(['status' => 'ok']);
+    }
+
+    /**
+     * زر "إرسال" في شاشة "إشعار التطبيق" في ERPNext بيستدعي هذا الـ endpoint (موقّع بنفس
+     * سر الويبهوك). target=all → topic واحد لكل الأجهزة؛ target=customers → أرقام Customer
+     * في ERPNext بنحوّلها لمستخدمين. الإرسال في الطابور — الرد فيه عدد المستهدفين بس.
+     */
+    public function handlePushNotification(Request $request): JsonResponse
+    {
+        $this->verifySignature($request);
+
+        $data = json_decode($request->getContent(), true) ?? [];
+
+        $validator = validator($data, [
+            'title' => ['required', 'string', 'max:150'],
+            'body' => ['required', 'string', 'max:1000'],
+            'image' => ['nullable', 'string', 'max:500'],
+            'target' => ['required', 'in:all,customers'],
+            'customers' => ['required_if:target,customers', 'array'],
+            'customers.*' => ['string'],
+            'data' => ['nullable', 'array'],
+            'reference' => ['nullable', 'string', 'max:150'],
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json(['status' => 'invalid', 'errors' => $validator->errors()], 422);
+        }
+
+        // صورة من ERPNext بتيجي مسار نسبي (/files/x.png) — FCM محتاج رابط كامل عام
+        $image = $data['image'] ?? null;
+        if ($image && str_starts_with($image, '/')) {
+            $image = rtrim((string) config('erpnext.url'), '/').$image;
+        }
+
+        $extra = array_filter([...($data['data'] ?? []), 'reference' => $data['reference'] ?? null]);
+        $userIds = null;
+        $unknown = [];
+
+        if ($data['target'] === 'customers') {
+            $users = User::whereIn('erp_customer_id', $data['customers'])->pluck('id', 'erp_customer_id');
+            $userIds = $users->values()->all();
+            $unknown = array_values(array_diff($data['customers'], $users->keys()->all()));
+        }
+
+        SendPushNotification::dispatch(
+            $data['target'] === 'all' ? 'broadcast' : 'custom',
+            $data['title'],
+            $data['body'],
+            $userIds,
+            $extra,
+            $image,
+        );
+
+        return response()->json([
+            'status' => 'queued',
+            'users' => $userIds === null ? User::where('is_active', true)->count() : count($userIds),
+            'devices' => DeviceToken::where('is_active', true)
+                ->when($userIds !== null, fn ($q) => $q->whereIn('user_id', $userIds))
+                ->count(),
+            // زبائن في ERPNext ما عندهمش حساب في التطبيق — ما هيوصلهمش حاجة
+            'unknown_customers' => $unknown,
+        ]);
     }
 
     private function verifySignature(Request $request): void

@@ -11,6 +11,7 @@ use App\Http\Controllers\Catalog\ProductController;
 use App\Http\Controllers\Shop\CartController;
 use App\Http\Controllers\Shop\FavoriteController;
 use App\Http\Controllers\Shop\HotelController;
+use App\Http\Controllers\Shop\NotificationController;
 use App\Http\Controllers\Shop\OrderController;
 use App\Http\Controllers\Shop\PaymentController;
 use App\Http\Controllers\Shop\VetController;
@@ -47,9 +48,17 @@ Route::prefix('v1')->group(function () {
 
     // بدون auth:sanctum — مهمة يومية من ERPNext (send_appointment_reminders)، محمية بنفس توقيع HMAC
     Route::post('/webhooks/appointment-reminder', [WebhookController::class, 'handleAppointmentReminder']);
+    // زر "إرسال" في شاشة "إشعار التطبيق" في ERPNext — موقّع بنفس سر الويبهوك
+    Route::post('/webhooks/push-notification', [WebhookController::class, 'handlePushNotification']);
 
     Route::middleware('auth:sanctum')->group(function () {
         Route::post('/auth/register-device', [DeviceController::class, 'register']);
+        Route::post('/auth/unregister-device', [DeviceController::class, 'unregister']);
+
+        Route::get('/notifications', [NotificationController::class, 'index']);
+        Route::get('/notifications/unread-count', [NotificationController::class, 'unreadCount']);
+        Route::post('/notifications/read-all', [NotificationController::class, 'markAllRead']);
+        Route::post('/notifications/{notification}/read', [NotificationController::class, 'markRead']);
 
         Route::get('/user', function (Request $request) {
             return $request->user();
