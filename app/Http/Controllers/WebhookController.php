@@ -395,9 +395,28 @@ class WebhookController extends Controller
      */
     private function handleItemUpdate(array $data, ERPNextService $erp): void
     {
-        if (! array_key_exists('item_name', $data)) {
+        $deactivate = function () use ($data) {
             Product::where('erp_name', $data['name'])->update(['is_active' => false, 'updated_at' => now()]);
             Bundle::where('item_code', $data['name'])->update(['is_active' => false, 'updated_at' => now()]);
+        };
+
+        if (! array_key_exists('item_name', $data)) {
+            $deactivate();
+
+            return;
+        }
+
+        // الـ Webhook Data في ERPNext بيبعت قائمة حقول محددة — أي حقل مش فيها (custom_is_featured،
+        // custom_show_in_app...) كان بيتسجل بالقيمة الافتراضية مع كل تعديل: المميز يرجع
+        // "مش مميز" والمخفي يرجع يظهر. بنجيب الصنف كامل من ERPNext ونعتمد على "name" بس.
+        try {
+            $data = $erp->get('Item', $data['name']);
+        } catch (\Illuminate\Http\Client\RequestException $e) {
+            if ($e->response->status() !== 404) {
+                throw $e;
+            }
+
+            $deactivate();
 
             return;
         }
@@ -416,11 +435,11 @@ class WebhookController extends Controller
             [
                 'item_code' => $data['item_code'] ?? null,
                 'item_name' => $data['item_name'] ?? $data['name'],
-                'item_group_erp_name' => $data['item_group'] ?: null,
-                'variant_of' => $data['variant_of'] ?: null,
+                'item_group_erp_name' => ($data['item_group'] ?? null) ?: null,
+                'variant_of' => ($data['variant_of'] ?? null) ?: null,
                 'attributes' => $this->cleanAttributes($data['attributes'] ?? [], $erp),
-                'description' => $data['description'] ?: null,
-                'image_path' => $data['image'] ?: null,
+                'description' => ($data['description'] ?? null) ?: null,
+                'image_path' => ($data['image'] ?? null) ?: null,
                 'price' => $data['standard_rate'] ?? 0,
                 'is_active' => ! ($data['disabled'] ?? false),
                 'show_in_app' => (bool) ($data['custom_show_in_app'] ?? true),
