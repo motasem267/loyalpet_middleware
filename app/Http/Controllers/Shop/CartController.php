@@ -16,10 +16,17 @@ class CartController extends Controller
     {
         $cart = Cart::where('user_id', $request->user()->id)
             ->where('status', 'active')
-            ->with('items.product')
             ->first();
 
-        return response()->json(['data' => $this->transformCart($cart)]);
+        $removed = $cart ? $cart->removeUnavailableItems() : [];
+
+        $cart?->load('items.product');
+
+        return response()->json([
+            'data' => $this->transformCart($cart),
+            // أسماء المنتجات اللي اتشالت من السلة لأنها اتخفت/اتوقفت — التطبيق ممكن ينبّه الزبون
+            'removed_items' => $removed,
+        ]);
     }
 
     public function store(Request $request): JsonResponse
@@ -29,9 +36,8 @@ class CartController extends Controller
             'quantity' => ['nullable', 'numeric', 'min:0.001'],
         ]);
 
-        $product = Product::where('item_code', $validated['item_code'])
-            ->where('is_active', true)
-            ->where('show_in_app', true)
+        $product = Product::visibleInApp()
+            ->where('item_code', $validated['item_code'])
             ->first();
 
         if (! $product) {

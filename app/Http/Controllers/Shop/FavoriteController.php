@@ -7,14 +7,14 @@ use App\Models\Favorite;
 use App\Models\Product;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Illuminate\Validation\Rule;
+use Illuminate\Validation\ValidationException;
 
 class FavoriteController extends Controller
 {
     public function index(Request $request): JsonResponse
     {
         $favorites = Favorite::where('user_id', $request->user()->id)
-            ->whereHas('product', fn ($query) => $query->where('is_active', true)->where('show_in_app', true))
+            ->whereHas('product', fn ($query) => $query->openableInApp())
             ->with('product')
             ->latest('created_at')
             ->get()
@@ -35,8 +35,14 @@ class FavoriteController extends Controller
     public function store(Request $request): JsonResponse
     {
         $validated = $request->validate([
-            'product_id' => ['required', 'integer', Rule::exists('products', 'id')->where('is_active', true)->where('show_in_app', true)],
+            'product_id' => ['required', 'integer'],
         ]);
+
+        if (! Product::openableInApp()->whereKey($validated['product_id'])->exists()) {
+            throw ValidationException::withMessages([
+                'product_id' => ['المنتج غير موجود أو غير متاح حاليًا'],
+            ]);
+        }
 
         Favorite::firstOrCreate([
             'user_id' => $request->user()->id,

@@ -71,8 +71,17 @@ class OrderController extends Controller
 
         $cart = Cart::where('user_id', $user->id)
             ->where('status', 'active')
-            ->with('items')
             ->first();
+
+        // منتج اتخفى/اتوقف بعد ما اتضاف للسلة: بيتشال، وبنوقف الطلب عشان الزبون يشوف
+        // السلة والمجموع الجديد قبل ما يأكد — مش نبعت طلب ناقص من غير ما يعرف
+        if ($cart && ($removed = $cart->removeUnavailableItems())) {
+            throw ValidationException::withMessages([
+                'cart' => ['منتجات ما عادش متاحة وتشالت من السلة: '.implode('، ', $removed).' — راجع السلة وأكمل الطلب'],
+            ]);
+        }
+
+        $cart?->load('items');
 
         if (! $cart || $cart->items->isEmpty()) {
             throw ValidationException::withMessages([
@@ -449,9 +458,8 @@ class OrderController extends Controller
      */
     private function buildOrderItems(array $items): array
     {
-        $products = Product::whereIn('item_code', array_column($items, 'item_code'))
-            ->where('is_active', true)
-            ->where('show_in_app', true)
+        $products = Product::visibleInApp()
+            ->whereIn('item_code', array_column($items, 'item_code'))
             ->withExists('variants')
             ->get()
             ->keyBy('item_code');

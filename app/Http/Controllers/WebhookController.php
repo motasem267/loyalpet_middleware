@@ -375,7 +375,7 @@ class WebhookController extends Controller
             $product = Product::where('erp_name', $product->variant_of)->first();
         }
 
-        return $product && $product->is_active && $product->show_in_app ? $product->id : null;
+        return $product && Product::listable()->whereKey($product->id)->exists() ? $product->id : null;
     }
 
     private function verifySignature(Request $request): void

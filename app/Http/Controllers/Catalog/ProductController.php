@@ -53,9 +53,7 @@ class ProductController extends Controller
     private function baseQuery(): Builder
     {
         return Product::query()
-            ->where('is_active', true)
-            ->where('show_in_app', true)
-            ->whereNull('variant_of')
+            ->listable()
             ->whereNotIn('item_code', Bundle::query()->whereNotNull('item_code')->pluck('item_code'));
     }
 
@@ -65,7 +63,9 @@ class ProductController extends Controller
      */
     public function show(Product $product): JsonResponse
     {
-        abort_unless($product->is_active && $product->show_in_app, 404, 'المنتج غير موجود');
+        // قالب: نفس شرط القوائم (لازم يكون ليه وزن ظاهر لو عنده أوزان). Variant مباشرة:
+        // ظاهر هو والقالب بتاعه.
+        abort_unless(Product::openableInApp()->whereKey($product->id)->exists(), 404, 'المنتج غير موجود');
 
         $variants = $product->variants()
             ->where('is_active', true)
