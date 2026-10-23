@@ -397,9 +397,19 @@ class WebhookController extends Controller
     {
         if (! array_key_exists('item_name', $data)) {
             Product::where('erp_name', $data['name'])->update(['is_active' => false, 'updated_at' => now()]);
+            Bundle::where('item_code', $data['name'])->update(['is_active' => false, 'updated_at' => now()]);
 
             return;
         }
+
+        // اسم الباقة وسعرها وتفعيلها جايين من الصنف اللي بيمثلها (new_item_code)، مش من
+        // Product Bundle نفسه — فتعديل الصنف لازم يحدّث الباقة كمان، وإلا تفضل بالقديم
+        Bundle::where('item_code', $data['item_code'] ?? $data['name'])->update([
+            'title' => $data['item_name'] ?? $data['name'],
+            'price' => $data['standard_rate'] ?? 0,
+            'is_active' => ! ($data['disabled'] ?? false),
+            'updated_at' => now(),
+        ]);
 
         Product::updateOrCreate(
             ['erp_name' => $data['name']],
@@ -504,7 +514,20 @@ class WebhookController extends Controller
      */
     private function handleProductBundleUpdate(array $data, ERPNextService $erp): void
     {
-        $doc = $erp->get('Product Bundle', $data['name']);
+        // الحذف (on_trash) بيوصل بنفس الويبهوك — الباقة ما عادش موجودة في ERPNext (404)،
+        // فبنمسحها هنا بدل ما الطلب يفشل والباقة تفضل ظاهرة في التطبيق
+        try {
+            $doc = $erp->get('Product Bundle', $data['name']);
+        } catch (\Illuminate\Http\Client\RequestException $e) {
+            if ($e->response->status() !== 404) {
+                throw $e;
+            }
+
+            Bundle::where('erp_name', $data['name'])->delete();
+
+            return;
+        }
+
         $item = $erp->get('Item', $doc['new_item_code']);
 
         $bundle = Bundle::updateOrCreate(

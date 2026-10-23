@@ -9,7 +9,7 @@ use Illuminate\Console\Attributes\Description;
 use Illuminate\Console\Attributes\Signature;
 use Illuminate\Console\Command;
 
-#[Signature('sync:bundles')]
+#[Signature('sync:bundles {--prune : يمسح الباقات اللي ما عادش موجودة في ERPNext بعد المزامنة}')]
 #[Description('سحب الباقات (Product Bundle) ومحتوياتها من ERPNext وتحديث الكاش المحلي')]
 class SyncBundles extends Command
 {
@@ -52,6 +52,17 @@ class SyncBundles extends Command
         }
 
         $this->info('تمت مزامنة '.count($bundles).' باقة.');
+
+        if ($this->option('prune')) {
+            if (! $bundles) {
+                $this->error('ERPNext رجّع صفر باقات — ما مسحناش حاجة احتياطًا.');
+
+                return self::FAILURE;
+            }
+
+            $deleted = Bundle::whereNotIn('erp_name', array_column($bundles, 'name'))->delete();
+            $this->info("تم مسح {$deleted} باقة مش موجودة في ERPNext.");
+        }
 
         return self::SUCCESS;
     }
