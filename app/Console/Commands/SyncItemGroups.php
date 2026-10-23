@@ -8,7 +8,7 @@ use Illuminate\Console\Attributes\Description;
 use Illuminate\Console\Attributes\Signature;
 use Illuminate\Console\Command;
 
-#[Signature('sync:item-groups')]
+#[Signature('sync:item-groups {--prune : يمسح التصنيفات اللي ما عادش موجودة في ERPNext بعد المزامنة}')]
 #[Description('سحب شجرة Item Group كاملة من ERPNext وتحديث الكاش المحلي')]
 class SyncItemGroups extends Command
 {
@@ -30,6 +30,17 @@ class SyncItemGroups extends Command
         }
 
         $this->info('تمت مزامنة '.count($groups).' تصنيف.');
+
+        if ($this->option('prune')) {
+            if (! $groups) {
+                $this->error('ERPNext رجّع صفر تصنيفات — ما مسحناش حاجة احتياطًا.');
+
+                return self::FAILURE;
+            }
+
+            $deleted = ItemGroup::whereNotIn('erp_name', array_column($groups, 'name'))->delete();
+            $this->info("تم مسح {$deleted} تصنيف مش موجود في ERPNext.");
+        }
 
         return self::SUCCESS;
     }

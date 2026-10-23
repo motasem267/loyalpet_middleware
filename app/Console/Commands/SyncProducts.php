@@ -8,7 +8,7 @@ use Illuminate\Console\Attributes\Description;
 use Illuminate\Console\Attributes\Signature;
 use Illuminate\Console\Command;
 
-#[Signature('sync:products')]
+#[Signature('sync:products {--prune : يمسح المنتجات اللي ما عادش موجودة في ERPNext بعد المزامنة}')]
 #[Description('سحب المنتجات من ERPNext وتحديث الكاش المحلي')]
 class SyncProducts extends Command
 {
@@ -76,6 +76,19 @@ class SyncProducts extends Command
         }
 
         $this->info('تمت مزامنة '.count($items).' منتج.');
+
+        // بعد المزامنة مش قبلها — التطبيق ما يفضاش في النص، والمنتجات الموجودة تفضل بنفس
+        // الـ id (المفضلة وروابط الإشعارات ما تتكسرش). المفضلة على منتج اتمسح بتتمسح معاه.
+        if ($this->option('prune')) {
+            if (! $items) {
+                $this->error('ERPNext رجّع صفر منتجات — ما مسحناش حاجة احتياطًا.');
+
+                return self::FAILURE;
+            }
+
+            $deleted = Product::whereNotIn('erp_name', array_column($items, 'name'))->delete();
+            $this->info("تم مسح {$deleted} منتج مش موجود في ERPNext.");
+        }
 
         return self::SUCCESS;
     }
