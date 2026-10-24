@@ -27,6 +27,18 @@ class ProductController extends Controller
             $query->where('item_name', 'like', '%'.$search.'%');
         }
 
+        if ($request->boolean('featured')) {
+            $query->where('is_featured', true);
+        }
+
+        // التطبيق بيقرا قسم "الأكثر طلبًا" وقائمة كل المنتجات من نفس الطلب (من غير تصنيف
+        // ولا بحث)، وتعديل التطبيق مكلف — فالمميزين (custom_is_featured) بييجوا الأول
+        // بترتيبهم، والقسم اللي بياخد أول كام منتج بيعرض المميزين. في التصنيف والبحث
+        // الترتيب العادي زي ما هو.
+        if (! $request->query('item_group') && ! $search) {
+            $query->orderByDesc('is_featured')->orderBy('featured_order');
+        }
+
         return response()->json($this->paginate($request, $query->orderBy('id')));
     }
 
