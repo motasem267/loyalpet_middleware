@@ -9,6 +9,7 @@ use App\Models\DeliveryZone;
 use App\Models\DeviceToken;
 use App\Models\ItemGroup;
 use App\Models\OrderStatusHistory;
+use App\Models\PendingSync;
 use App\Models\Product;
 use App\Models\User;
 use App\Services\ERPNextService;
@@ -49,6 +50,7 @@ class WebhookController extends Controller
 
             match ($doctype) {
                 'Item Group' => $this->handleItemGroupRename($data, $erp),
+                'Item' => $this->handleItemRename($data, $erp),
                 default => Log::warning('[Webhook:erp] rename غير معالج لـ '.($doctype ?? 'null')),
             };
 
@@ -499,6 +501,59 @@ class WebhookController extends Controller
      * الجديد. آمنة لو اتكررت (نفس الحدث مرتين ما بيبوظش حاجة). ولو الاسم القديم أصلًا
      * مش موجود عندنا (الكاش مش متزامن) ولا الجديد، بنجيب المجموعة من ERPNext ونضيفها.
      */
+    /**
+     * إعادة تسمية صنف في ERPNext بتغيّر الـ name والـ item_code — من غيرها المنتج يفضل عندنا
+     * بالكود القديم، والسلة والطلبات تتبعت بيه وERPNext يرفض ("Item ... not found").
+     * بنحدّث المنتج (نفس الـ id عشان المفضلة)، والأوزان التابعة، والسلات، ومحتويات الباقات،
+     * والطلبات اللي لسه في الطابور.
+     */
+    private function handleItemRename(array $data, ERPNextService $erp): void
+    {
+        $oldName = $data['old_name'] ?? null;
+        $newName = $data['new_name'] ?? null;
+
+        abort_unless($oldName && $newName, 422, 'old_name و new_name مطلوبين');
+
+        if ($oldName === $newName) {
+            return;
+        }
+
+        DB::transaction(function () use ($oldName, $newName) {
+            if (Product::where('erp_name', $newName)->exists()) {
+                Product::where('erp_name', $oldName)->delete();
+            } else {
+                Product::where('erp_name', $oldName)->update(['erp_name' => $newName, 'item_code' => $newName, 'updated_at' => now()]);
+            }
+
+            Product::where('variant_of', $oldName)->update(['variant_of' => $newName, 'updated_at' => now()]);
+            DB::table('cart_items')->where('erp_item_code', $oldName)->update(['erp_item_code' => $newName]);
+            DB::table('bundle_items')->where('item_code', $oldName)->update(['item_code' => $newName]);
+            Bundle::where('item_code', $oldName)->update(['item_code' => $newName]);
+
+            PendingSync::where('doctype', 'Sales Order')
+                ->whereIn('status', ['pending', 'failed'])
+                ->get()
+                ->each(function (PendingSync $sync) use ($oldName, $newName) {
+                    $payload = $sync->payload;
+                    $changed = false;
+
+                    foreach ($payload['items'] ?? [] as $i => $item) {
+                        if ($item['item_code'] === $oldName) {
+                            $payload['items'][$i]['item_code'] = $newName;
+                            $changed = true;
+                        }
+                    }
+
+                    if ($changed) {
+                        $sync->update(['payload' => $payload]);
+                    }
+                });
+        });
+
+        // بنجيب الصنف كامل بالاسم الجديد (سعر/صورة/حقول مخصصة) — نفس مسار الويبهوك العادي
+        $this->handleItemUpdate(['name' => $newName, 'item_name' => $newName], $erp);
+    }
+
     private function handleItemGroupRename(array $data, ERPNextService $erp): void
     {
         $oldName = $data['old_name'] ?? null;

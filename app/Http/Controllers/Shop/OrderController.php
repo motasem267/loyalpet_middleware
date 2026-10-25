@@ -149,7 +149,7 @@ class OrderController extends Controller
                 ->map(fn (PendingSync $sync) => [
                     'name' => null,
                     'status' => $sync->status === 'failed' ? 'فشل الإرسال' : 'جاري الإرسال',
-                    'grand_total' => null,
+                    'grand_total' => round(collect($sync->payload['items'] ?? [])->sum(fn ($i) => $i['qty'] * $i['rate']), 2),
                     'transaction_date' => $sync->created_at,
                     'reference' => $sync->id,
                     'error_message' => $sync->payload['rejection_message'] ?? null,
