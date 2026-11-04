@@ -21,6 +21,7 @@ class OrderTelegramNotifier
         'delivery_date' => 'تاريخ التوصيل',
         'payment_method' => 'الدفع',
         'notes' => 'ملاحظات',
+        'coupon_code' => 'الكوبون',
     ];
 
     public function created(PendingSync $sync, string $erpName): void
@@ -107,6 +108,7 @@ class OrderTelegramNotifier
             'delivery_date' => $doc['delivery_date'] ?? null,
             'payment_method' => $doc['custom_payment_method'] ?? null,
             'notes' => $doc['custom_notes'] ?? null,
+            'coupon_code' => $doc['coupon_code'] ?? null,
             'items' => array_map(fn (array $row) => [
                 'item_code' => $row['item_code'],
                 'qty' => $row['qty'],
@@ -126,7 +128,7 @@ class OrderTelegramNotifier
             ."📍 العنوان: {$this->e($order['delivery_address'] ?? '-')}\n"
             ."📅 تاريخ التوصيل: {$this->e($order['delivery_date'] ?? '-')}\n"
             ."💳 الدفع: {$this->value('payment_method', $order['payment_method'] ?? null)}\n\n"
-            ."🛒 <b>الأصناف:</b>\n".$this->items($order['items'] ?? []);
+            ."🛒 <b>الأصناف:</b>\n".$this->items($order['items'] ?? [], $order['coupon_code'] ?? null, (float) ($order['discount_amount'] ?? 0));
 
         if (! empty($order['notes'])) {
             $text .= "\n📝 ملاحظات: {$this->e($order['notes'])}";
@@ -135,7 +137,7 @@ class OrderTelegramNotifier
         return $text;
     }
 
-    private function items(array $items): string
+    private function items(array $items, ?string $coupon = null, float $discount = 0): string
     {
         $names = Product::whereIn('item_code', array_column($items, 'item_code'))->pluck('item_name', 'item_code');
         $total = 0;
@@ -148,7 +150,14 @@ class OrderTelegramNotifier
                 .' × '.$this->number($item['qty']).' = '.number_format($amount, 2);
         }
 
-        return implode("\n", $lines)."\n\n💰 <b>المجموع: ".number_format($total, 2).' د.ل</b>';
+        $text = implode("\n", $lines)."\n\n💰 <b>المجموع: ".number_format($total, 2).' د.ل</b>';
+
+        if ($coupon) {
+            $text .= "\n🎟️ كوبون {$this->e($coupon)}: خصم ".number_format($discount, 2).' د.ل'
+                ."\n💵 <b>بعد الخصم: ".number_format($total - $discount, 2).' د.ل</b>';
+        }
+
+        return $text;
     }
 
     private function value(string $key, mixed $value): string

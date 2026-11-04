@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\Cart;
 use App\Models\CartItem;
 use App\Models\Product;
+use App\Services\CouponService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Validation\ValidationException;
@@ -78,9 +79,17 @@ class CartController extends Controller
             ]);
         }
 
+        // الكوبونات ما تنطبقش مع الباقات — إضافة باقة لسلة فيها كوبون بتشيله، والتطبيق بينبّه الزبون
+        $couponRemoved = null;
+
+        if ($cart->coupon_code && CouponService::hasPackage([$product->item_code])) {
+            $cart->removeCoupon();
+            $couponRemoved = CouponService::REMOVED_FOR_PACKAGE;
+        }
+
         $cart->load('items.product');
 
-        return response()->json(['data' => $this->transformCart($cart)], 201);
+        return response()->json(['data' => $this->transformCart($cart, $couponRemoved)], 201);
     }
 
     public function update(Request $request, string $itemCode): JsonResponse
@@ -111,6 +120,59 @@ class CartController extends Controller
     }
 
     /**
+     * تطبيق كوبون على السلة — التحقق من ERPNext (صلاحية، عدد الاستعمال، الزبون...)،
+     * والخصم بعدها بيتحسب محليًا مع كل عرض للسلة. التحقق النهائي بيتعاد وقت الطلب.
+     */
+    public function applyCoupon(Request $request, CouponService $coupons): JsonResponse
+    {
+        $validated = $request->validate([
+            'code' => ['required', 'string', 'max:64'],
+        ], [
+            'code.required' => 'اكتب كود الكوبون',
+        ]);
+
+        $cart = Cart::where('user_id', $request->user()->id)
+            ->where('status', 'active')
+            ->with('items')
+            ->first();
+
+        if (! $cart || $cart->items->isEmpty()) {
+            throw ValidationException::withMessages([
+                'code' => ['السلة فارغة — أضف منتجات أولًا'],
+            ]);
+        }
+
+        $items = $cart->items->map(fn (CartItem $item) => [
+            'item_code' => $item->erp_item_code,
+            'qty' => $item->quantity,
+            'rate' => $item->price_at_add,
+        ])->all();
+
+        $coupon = $coupons->validate($request->user(), trim($validated['code']), $items);
+
+        if (! $coupon) {
+            throw ValidationException::withMessages([
+                'code' => ['تعذر التحقق من الكوبون حاليًا، حاول مرة أخرى'],
+            ]);
+        }
+
+        $cart->update(['coupon_code' => $coupon['code'], 'coupon' => $coupon]);
+
+        return response()->json(['data' => $this->transformCart($cart->load('items.product'))]);
+    }
+
+    public function removeCoupon(Request $request): JsonResponse
+    {
+        $cart = Cart::where('user_id', $request->user()->id)
+            ->where('status', 'active')
+            ->first();
+
+        $cart?->removeCoupon();
+
+        return response()->json(['data' => $this->transformCart($cart?->load('items.product'))]);
+    }
+
+    /**
      * كل مستخدم عنده سلة نشطة واحدة بس، وitem_code فريد جواها (بيتزود في الكمية
      * بدل ما يتكرر السطر وقت الإضافة) — فالتوجيه بـ item_code آمن ومحصور بسلة
      * المستخدم الحالي تلقائيًا، بدون احتياج لفحص ملكية منفصل.
@@ -130,13 +192,13 @@ class CartController extends Controller
         return $cartItem;
     }
 
-    private function transformCart(?Cart $cart): array
+    /**
+     * total = بعد خصم الكوبون ومن غير التوصيل. coupon_allowed هو اللي بيقرر يظهر حقل
+     * الكوبون في التطبيق ولا لا — التطبيق ما بيحددش بنفسه شن هي الباقة.
+     */
+    private function transformCart(?Cart $cart, ?string $couponRemoved = null): array
     {
-        if (! $cart) {
-            return ['items' => [], 'total' => '0.00'];
-        }
-
-        $items = $cart->items->map(fn (CartItem $item) => [
+        $items = collect($cart?->items ?? [])->map(fn (CartItem $item) => [
             'id' => $item->id,
             'item_code' => $item->erp_item_code,
             'item_name' => $item->product?->item_name,
@@ -146,9 +208,30 @@ class CartController extends Controller
             'line_total' => $item->line_total,
         ]);
 
+        $subtotal = round($items->sum(fn ($i) => (float) $i['line_total']), 2);
+        $coupon = $cart?->coupon_code ? $cart->coupon : null;
+        $discount = CouponService::discount($coupon, $subtotal);
+        $allowed = ! CouponService::hasPackage($items->pluck('item_code')->all());
+
         return [
-            'items' => $items,
-            'total' => number_format($items->sum(fn ($i) => (float) $i['line_total']), 2, '.', ''),
+            'items' => $items->values(),
+            'subtotal' => $this->money($subtotal),
+            'discount' => $this->money($discount),
+            'total' => $this->money($subtotal - $discount),
+            'coupon' => $coupon ? [
+                'code' => $coupon['code'],
+                'title' => $coupon['title'] ?? null,
+                'discount_type' => $coupon['discount_type'],
+                'discount_value' => $coupon['discount_value'],
+            ] : null,
+            'coupon_allowed' => $allowed,
+            'coupon_blocked_reason' => $allowed ? null : CouponService::BLOCKED_REASON,
+            'coupon_removed_message' => $couponRemoved,
         ];
+    }
+
+    private function money(float $amount): string
+    {
+        return number_format($amount, 2, '.', '');
     }
 }

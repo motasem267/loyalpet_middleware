@@ -77,6 +77,9 @@ Route::prefix('v1')->group(function () {
         Route::post('/cart/items', [CartController::class, 'store']);
         Route::patch('/cart/items/{itemCode}', [CartController::class, 'update']);
         Route::delete('/cart/items/{itemCode}', [CartController::class, 'destroy']);
+        // throttle: ما يقعدش حد يجرّب أكواد كوبونات ورا بعض
+        Route::post('/cart/coupon', [CartController::class, 'applyCoupon'])->middleware('throttle:10,1');
+        Route::delete('/cart/coupon', [CartController::class, 'removeCoupon']);
 
         Route::get('/orders', [OrderController::class, 'index']);
         Route::post('/orders', [OrderController::class, 'store']);

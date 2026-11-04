@@ -96,6 +96,9 @@ class SyncToERPNext implements ShouldQueue
                 'delivery_address' => $payload['delivery_address'],
                 'delivery_date' => $payload['delivery_date'],
                 'notes' => $payload['notes'] ?? null,
+                // ERPNext بيعيد التحقق من الكوبون — لو رفضه (خلص مثلًا) الطلب بيطلع "فشل الإرسال"
+                // برسالته، والزبون يشيل الكوبون (PATCH) فيرجع للطابور
+                ...(! empty($payload['coupon_code']) ? ['coupon_code' => $payload['coupon_code']] : []),
                 ...($isTransfer ? ['transfer_receipt' => $payload['transfer_receipt_url'] ?? null] : []),
             ]));
         } catch (RequestException $e) {

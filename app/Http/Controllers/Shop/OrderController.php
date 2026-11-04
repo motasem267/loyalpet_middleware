@@ -7,6 +7,7 @@ use App\Jobs\SyncToERPNext;
 use App\Models\Cart;
 use App\Models\PendingSync;
 use App\Models\Product;
+use App\Services\CouponService;
 use App\Services\ERPNextService;
 use App\Services\OrderTelegramNotifier;
 use Illuminate\Http\JsonResponse;
@@ -41,7 +42,7 @@ class OrderController extends Controller
      * إنشاء طلب من السلة النشطة الحالية — الكتابة دايمًا عبر الطابور (pending_syncs)،
      * مش نداء مباشر لـ ERPNext، حتى مع وجود إنترنت.
      */
-    public function store(Request $request): JsonResponse
+    public function store(Request $request, CouponService $coupons): JsonResponse
     {
         try {
             $validated = $request->validate([
@@ -95,6 +96,8 @@ class OrderController extends Controller
             'rate' => (float) $item->price_at_add,
         ])->values()->all();
 
+        $coupon = $this->cartCoupon($cart, $items, $request, $coupons);
+
         // الإيصال بيتحفظ هنا لحد ما SyncToERPNext يرفعه لـ ERPNext — لو ERPNext واقع
         // وقت الطلب، الصورة ما تضيعش
         $receiptPath = $request->file('transfer_receipt')?->store('transfer-receipts');
@@ -106,6 +109,7 @@ class OrderController extends Controller
             'payload' => [
                 ...($receiptPath ? ['transfer_receipt_path' => $receiptPath] : []),
                 'items' => $items,
+                ...$this->couponFields($coupon, $items),
                 'payment_method' => $validated['payment_method'],
                 'recipient_name' => $validated['recipient_name'],
                 'recipient_phone' => $validated['recipient_phone'],
@@ -149,7 +153,7 @@ class OrderController extends Controller
                 ->map(fn (PendingSync $sync) => [
                     'name' => null,
                     'status' => $sync->status === 'failed' ? 'فشل الإرسال' : 'جاري الإرسال',
-                    'grand_total' => round(collect($sync->payload['items'] ?? [])->sum(fn ($i) => $i['qty'] * $i['rate']), 2),
+                    'grand_total' => round(CouponService::subtotal($sync->payload['items'] ?? []) - ($sync->payload['discount_amount'] ?? 0), 2),
                     'transaction_date' => $sync->created_at,
                     'reference' => $sync->id,
                     'error_message' => $sync->payload['rejection_message'] ?? null,
@@ -219,9 +223,10 @@ class OrderController extends Controller
     /**
      * تعديل طلب — أي حقل من حقول الإنشاء (كلها اختيارية هنا، بس لازم واحد على الأقل).
      * items لو اتبعتت بتستبدل أصناف الطلب كلها، والسعر دايمًا من الكاش المحلي (مش من التطبيق).
+     * coupon_code: كود جديد، أو null عشان يتشال. الكوبون ما يتجمعش مع الباقات.
      * {order} = رقم الطلب في ERPNext، أو reference (رقم) لطلب لسه في الطابور.
      */
-    public function update(Request $request, string $order, ERPNextService $erp, OrderTelegramNotifier $notifier): JsonResponse
+    public function update(Request $request, string $order, ERPNextService $erp, OrderTelegramNotifier $notifier, CouponService $coupons): JsonResponse
     {
         $validated = $request->validate([
             'payment_method' => ['sometimes', 'string', Rule::in(array_keys(config('payment.methods')))],
@@ -234,6 +239,7 @@ class OrderController extends Controller
             'items' => ['sometimes', 'array', 'min:1'],
             'items.*.item_code' => ['required', 'string', 'distinct'],
             'items.*.qty' => ['required', 'numeric', 'min:0.001'],
+            'coupon_code' => ['sometimes', 'nullable', 'string', 'max:64'],
         ], self::RECEIPT_MESSAGES);
 
         if (! $validated) {
@@ -249,17 +255,47 @@ class OrderController extends Controller
             $changes['items'] = $this->buildOrderItems($validated['items']);
         }
 
+        $couponGiven = array_key_exists('coupon_code', $changes);
+
+        if ($couponGiven && $changes['coupon_code'] !== null) {
+            $changes['coupon_code'] = trim($changes['coupon_code']);
+        }
+
         if (ctype_digit($order)) {
             $resend = false;
             $before = [];
+            $coupon = null;
 
-            $sync = $this->withQueuedOrder($request, (int) $order, function (PendingSync $sync) use ($changes, $receipt, &$resend, &$before) {
+            // التحقق من ERPNext برا القفل (lockForUpdate) — نداء شبكة جوّه الـ transaction
+            // بيمسك صف الطابور على الفاضي
+            if ($couponGiven && $changes['coupon_code'] !== null) {
+                $current = PendingSync::where('id', (int) $order)
+                    ->where('user_id', $request->user()->id)
+                    ->where('doctype', 'Sales Order')
+                    ->first();
+
+                abort_if(! $current, 404, 'الطلب غير موجود');
+
+                $coupon = $coupons->validate($request->user(), $changes['coupon_code'], $changes['items'] ?? $current->payload['items'] ?? [], 'coupon_code')
+                    ?? throw ValidationException::withMessages([
+                        'coupon_code' => ['تعذر التحقق من الكوبون حاليًا، حاول مرة أخرى'],
+                    ]);
+            }
+
+            $sync = $this->withQueuedOrder($request, (int) $order, function (PendingSync $sync) use ($changes, $receipt, $couponGiven, $coupon, &$resend, &$before) {
                 $before = $sync->payload;
 
                 $this->ensureReceiptMatchesMethod($sync->payload['payment_method'] ?? null, $changes['payment_method'] ?? null, (bool) $receipt);
 
                 $payload = array_merge($sync->payload, $changes);
                 unset($payload['rejection_message']);
+
+                if ($couponGiven) {
+                    $payload = [...$payload, ...$this->couponFields($coupon, $payload['items'])];
+                } elseif (isset($changes['items']) && ! empty($payload['coupon_code'])) {
+                    $this->ensureNoPackageWithCoupon($changes['items']);
+                    $payload['discount_amount'] = CouponService::discount($payload['coupon'] ?? null, CouponService::subtotal($payload['items']));
+                }
 
                 if ($receipt) {
                     if (! empty($payload['transfer_receipt_path'])) {
@@ -295,6 +331,23 @@ class OrderController extends Controller
         $doc = $this->ensureEditableErpOrder($request, $order, $erp);
 
         $this->ensureReceiptMatchesMethod($doc['custom_payment_method'] ?? null, $changes['payment_method'] ?? null, (bool) $receipt);
+
+        // فحص الباقات هنا لرسالة واضحة بسرعة — باقي شروط الكوبون (صلاحية، استعمال...)
+        // بيتحقق منها ERPNext في update_sales_order
+        $finalItems = $changes['items'] ?? $doc['items'] ?? [];
+
+        if ($couponGiven && $changes['coupon_code'] !== null) {
+            if (CouponService::hasPackage(array_column($finalItems, 'item_code'))) {
+                throw ValidationException::withMessages(['coupon_code' => [CouponService::BLOCKED_REASON]]);
+            }
+        } elseif (isset($changes['items']) && ! $couponGiven && ! empty($doc['coupon_code'])) {
+            $this->ensureNoPackageWithCoupon($changes['items']);
+        }
+
+        // "" عند ERPNext = شيل الكوبون (null معناه "ما اتغيرش")
+        if ($couponGiven && $changes['coupon_code'] === null) {
+            $changes['coupon_code'] = '';
+        }
 
         if ($receipt) {
             try {
@@ -396,6 +449,47 @@ class OrderController extends Controller
     }
 
     /**
+     * تحقق أخير من كوبون السلة قبل الطلب (ممكن يكون خلص/انتهى من وقت ما الزبون طبّقه).
+     * الكوبون المرفوض بيتشال من السلة والطلب بيتوقف عشان الزبون يشوف المجموع الجديد.
+     * لو ERPNext مش متاح، بنكمل بالكوبون اللي اتحقق منه وقت التطبيق — ERPNext بيعيد
+     * التحقق وقت الإنشاء، ولو رفضه الطلب بيطلع "فشل الإرسال" والزبون يشيله ويعيد.
+     */
+    private function cartCoupon(Cart $cart, array $items, Request $request, CouponService $coupons): ?array
+    {
+        if (! $cart->coupon_code) {
+            return null;
+        }
+
+        try {
+            return $coupons->validate($request->user(), $cart->coupon_code, $items, 'coupon') ?? $cart->coupon;
+        } catch (ValidationException $e) {
+            $cart->removeCoupon();
+
+            throw $e;
+        }
+    }
+
+    private function ensureNoPackageWithCoupon(array $items): void
+    {
+        if (CouponService::hasPackage(array_column($items, 'item_code'))) {
+            throw ValidationException::withMessages(['items' => [CouponService::ORDER_HAS_COUPON]]);
+        }
+    }
+
+    /**
+     * حقول الكوبون في payload الطلب — discount_amount للعرض (قائمة الطلبات/التليجرام)
+     * قبل ما يوصل ERPNext، والخصم الفعلي بيحسبه ERPNext.
+     */
+    private function couponFields(?array $coupon, array $items): array
+    {
+        return [
+            'coupon_code' => $coupon['code'] ?? null,
+            'coupon' => $coupon,
+            'discount_amount' => CouponService::discount($coupon, CouponService::subtotal($items)),
+        ];
+    }
+
+    /**
      * الحوالة لازم يكون معاها إيصال: التحويل لـ bank_transfer من طريقة تانية لازم يرفع
      * إيصال، والإيصال ما ينفعش يتبعت مع طريقة غير الحوالة.
      */
@@ -447,7 +541,9 @@ class OrderController extends Controller
             'transfer_receipt_url' => ! empty($payload['transfer_receipt_path'])
                 ? url("/api/v1/orders/{$sync->id}/transfer-receipt")
                 : null,
-            'grand_total' => round(array_sum(array_column($items, 'amount')), 2),
+            'coupon_code' => $payload['coupon_code'] ?? null,
+            'discount_amount' => $payload['discount_amount'] ?? 0,
+            'grand_total' => round(array_sum(array_column($items, 'amount')) - ($payload['discount_amount'] ?? 0), 2),
             'items' => $this->withProductImages($items),
         ];
     }

@@ -7,9 +7,21 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 
-#[Fillable(['user_id', 'status'])]
+#[Fillable(['user_id', 'status', 'coupon_code', 'coupon'])]
 class Cart extends Model
 {
+    protected function casts(): array
+    {
+        return [
+            'coupon' => 'array',
+        ];
+    }
+
+    public function removeCoupon(): void
+    {
+        $this->update(['coupon_code' => null, 'coupon' => null]);
+    }
+
     public function user(): BelongsTo
     {
         return $this->belongsTo(User::class);
