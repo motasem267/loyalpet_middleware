@@ -16,6 +16,9 @@ return Application::configure(basePath: dirname(__DIR__))
         // API فقط — مفيش صفحة "login" ويب نرجّع لها الزوار الغير مسجّلين دخول،
         // فبنمنع أي محاولة redirect ونخلي Sanctum يرجع 401 JSON دايمًا.
         $middleware->redirectGuestsTo(fn () => null);
+
+        // نسخة التطبيق (X-App-Version): تسجيلها على الزبون + التحديث الإجباري (426)
+        $middleware->api(append: [\App\Http\Middleware\CheckAppVersion::class]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {
         $exceptions->shouldRenderJsonWhen(

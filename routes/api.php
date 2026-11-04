@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Controllers\AppVersionController;
 use App\Http\Controllers\Auth\AuthController;
 use App\Http\Controllers\Auth\DeviceController;
 use App\Http\Controllers\Auth\ProfileController;
@@ -39,6 +40,7 @@ Route::prefix('v1')->group(function () {
     Route::get('/bundles/{bundle}', [BundleController::class, 'show']);
     Route::get('/delivery-zones', [DeliveryZoneController::class, 'index']);
     Route::get('/payment-methods', [PaymentMethodController::class, 'index']);
+    Route::get('/app/version', [AppVersionController::class, 'check']);
 
     // بدون auth:sanctum — ERPNext مش مستخدم موبايل، الحماية عن طريق توقيع HMAC بس
     Route::post('/webhooks/erp', [WebhookController::class, 'handleErp']);

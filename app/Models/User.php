@@ -33,6 +33,7 @@ class User extends Authenticatable
             'password' => 'hashed',
             'erp_synced_at' => 'datetime',
             'is_active' => 'boolean',
+            'app_version_seen_at' => 'datetime',
         ];
     }
 
