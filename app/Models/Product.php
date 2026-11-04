@@ -13,7 +13,7 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 #[Fillable([
     'erp_name', 'item_code', 'item_name', 'item_group_erp_name', 'variant_of', 'attributes',
     'description', 'image_path', 'price', 'is_active',
-    'show_in_app', 'is_featured', 'featured_order',
+    'show_in_app', 'is_featured', 'featured_order', 'erp_created_at',
 ])]
 class Product extends Model
 {
@@ -32,6 +32,7 @@ class Product extends Model
             'is_featured' => 'boolean',
             'attributes' => 'array',
             'updated_at' => 'datetime',
+            'erp_created_at' => 'datetime',
         ];
     }
 

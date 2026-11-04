@@ -447,6 +447,7 @@ class WebhookController extends Controller
                 'show_in_app' => (bool) ($data['custom_show_in_app'] ?? true),
                 'is_featured' => (bool) ($data['custom_is_featured'] ?? false),
                 'featured_order' => (int) ($data['custom_featured_order'] ?? 0),
+                'erp_created_at' => $data['creation'] ?? null,
                 'updated_at' => now(),
             ]
         );

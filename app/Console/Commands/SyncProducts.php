@@ -17,7 +17,7 @@ class SyncProducts extends Command
         $items = $erp->getAll('Item', fields: [
             'name', 'item_code', 'item_name', 'item_group', 'description',
             'image', 'standard_rate', 'disabled', 'variant_of', 'has_variants',
-            'custom_show_in_app', 'custom_is_featured', 'custom_featured_order',
+            'custom_show_in_app', 'custom_is_featured', 'custom_featured_order', 'creation',
         ]);
 
         // بنكاش قيم كل خاصية (attribute_name) جوّه تشغيلة sync:products الواحدة —
@@ -70,6 +70,7 @@ class SyncProducts extends Command
                     'show_in_app' => (bool) ($item['custom_show_in_app'] ?? true),
                     'is_featured' => (bool) ($item['custom_is_featured'] ?? false),
                     'featured_order' => (int) ($item['custom_featured_order'] ?? 0),
+                    'erp_created_at' => $item['creation'] ?? null,
                     'updated_at' => now(),
                 ]
             );

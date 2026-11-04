@@ -57,6 +57,27 @@ class ProductController extends Controller
     }
 
     /**
+     * المضافة حديثًا — آخر 40 منتج حسب تاريخ إنشاء الصنف في ERPNext (creation)؛ كل منتج
+     * جديد بيدخل أول القائمة والأقدم بيطلع منها. نفس شروط الظهور بتاعة باقي القوائم
+     * (ظاهر في التطبيق، قالب مش وزن، ومش صنف باقة). ?limit= لعدد أقل (حد أقصى 40).
+     */
+    public function newArrivals(Request $request): JsonResponse
+    {
+        $limit = min(40, max(1, (int) $request->query('limit', 40)));
+
+        $items = $this->baseQuery()
+            ->orderByDesc('erp_created_at')
+            ->orderByDesc('id')
+            ->limit($limit)
+            ->get();
+
+        return response()->json([
+            'data' => $items,
+            'meta' => ['total' => $items->count()],
+        ]);
+    }
+
+    /**
      * الصنف (Item) اللي بيمثّل باقة عند البيع (new_item_code بتاع Product Bundle) موجود
      * أصلًا كـ Item عادي في ERPNext، فـ sync:products/الويبهوك بيسحبه لجدول products زي أي
      * منتج تاني — بنستبعده هنا بس (مش وقت المزامنة) عشان يفضل موجود في الكاش المحلي
