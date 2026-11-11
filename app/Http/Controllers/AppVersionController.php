@@ -13,6 +13,9 @@ class AppVersionController extends Controller
      */
     public function check(Request $request): JsonResponse
     {
+        // "Android"/"iOS" بحرف كبير ما يرجعش 422 — التطبيق ممكن يفهم أي خطأ إنه "لازم تحديث"
+        $request->merge(['platform' => strtolower(trim((string) $request->query('platform')))]);
+
         $validated = $request->validate([
             'platform' => ['required', 'in:android,ios'],
             'version' => ['required', 'string', 'max:20'],
@@ -27,7 +30,7 @@ class AppVersionController extends Controller
             'minimum' => $config['minimum'] ?? null,
             'latest' => $latest,
             'update_required' => CheckAppVersion::updateRequired($validated['version'], $validated['platform']),
-            'update_available' => $latest && version_compare($validated['version'], $latest, '<'),
+            'update_available' => $latest && version_compare(CheckAppVersion::normalize($validated['version']), CheckAppVersion::normalize($latest), '<'),
             'store_url' => $config['store_url'] ?? null,
             'message' => config('app_version.message'),
         ]);

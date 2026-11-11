@@ -40,13 +40,29 @@ class CheckAppVersion
 
     public static function updateRequired(string $version, string $platform): bool
     {
+        $version = static::normalize($version);
+
         if ($version === '') {
             return (bool) config('app_version.block_missing_version');
         }
 
-        $minimum = config("app_version.platforms.{$platform}.minimum");
+        $minimum = config('app_version.platforms.'.strtolower(trim($platform)).'.minimum');
 
-        return $minimum && version_compare($version, $minimum, '<');
+        return $minimum && version_compare($version, static::normalize($minimum), '<');
+    }
+
+    /**
+     * الأرقام بس، مكمّلة لـ 3 خانات: "1.0" و"v1.0.0" و"1.0.0 (5)" و"1.0.0+5" كلها 1.0.0 —
+     * من غيرها version_compare بيعتبر "1.0" أقدم من "1.0.0" ويقفل التطبيق على نسخة سليمة.
+     * نص من غير أرقام = كأنه ما اتبعتش.
+     */
+    public static function normalize(string $version): string
+    {
+        if (! preg_match('/\d+(?:\.\d+)*/', $version, $match)) {
+            return '';
+        }
+
+        return implode('.', array_pad(explode('.', $match[0]), 3, '0'));
     }
 
     /**
